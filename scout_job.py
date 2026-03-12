@@ -48,6 +48,27 @@ ASSETS = {
     "HBAR": "hedera-hashgraph"
 }
 
+# --- GAP HEALER LOGIC ---
+# If the gap is > 7 mins, we backfill missing 5-min intervals
+gap_seconds = (now - last_ts).total_seconds()
+if gap_seconds > 420 and not df.empty:
+    missing_slots = int(gap_seconds // 300)
+    print(f"🔍 Vance detected a {int(gap_seconds/60)} min gap. Healing {missing_slots} slots...")
+    
+    for i in range(1, missing_slots + 1):
+        heal_ts = last_ts + timedelta(minutes=5 * i)
+        for asset_name in ASSETS.keys():
+            # Find the last known price for this specific asset to use as a placeholder
+            last_asset_price = df[df['Asset'] == asset_name]['Balance'].iloc[-1] if not df[df['Asset'] == asset_name].empty else 0
+            
+            heal_row = pd.DataFrame([{
+                "Staff": "Vance (Heal)", 
+                "Timestamp": heal_ts, 
+                "Asset": asset_name, 
+                "Balance": float(last_asset_price)
+            }])
+            df = pd.concat([df, heal_row], ignore_index=True)
+
 # Add current spot prices for all assets using Vance's logic
 for asset_name, market_id in ASSETS.items():
     try:
@@ -73,21 +94,23 @@ for asset_name in ASSETS.keys():
         asset_df['Balance'] = pd.to_numeric(asset_df['Balance'])
         
         # Kael calculates the "Magnet" using the last 576 points (exactly 48 hours)
-        # Note: 48 hours * 12 pings/hr = 576 data points
         magnet = asset_df['Balance'].tail(576).mean()
         current_price = float(asset_df['Balance'].iloc[-1])
         
         # C. JACE: EXECUTE
-        # Note: Background scout passes None for RSI/Ledger to trigger standard safety checks
         _, _, outcome, _ = jace.execute_trade(asset_name, current_price, magnet, history_df=asset_df)
         
         # High-precision console reporting
         print(f"Sect: {asset_name} | Price: ${current_price:.6f} | Magnet: ${magnet:.6f} | Jace: {outcome}")
 
-# D. SHRED & HIGH-SPEED SYNC
-# Keep 50 hours of data to ensure Kael's 48-hour magnet is always full
+# D. SHRED & HIGH-SPEED SYNC (The Janitor)
+# We keep 48 hours per asset. 3 assets * 576 pings = 1728 rows. 
+# We use a 50-hour cutoff to be safe.
 cutoff = datetime.utcnow() - timedelta(hours=50)
 df = df[df['Timestamp'] > cutoff]
+
+# Sort one last time to ensure Vault is perfectly chronological
+df = df.sort_values(by=['Timestamp', 'Asset'])
 
 if not df.empty:
     df_sync = df[['Staff', 'Timestamp', 'Asset', 'Balance']].copy()
@@ -97,6 +120,6 @@ if not df.empty:
     try:
         sheet.clear()
         sheet.update(range_name='A1', values=data_to_save)
-        print(f"✅ Alt-Sentinel Vault synced. Depth: {len(df_sync)} rows across 3 assets.")
+        print(f"✅ Alt-Sentinel Vault synced. Depth: {len(df_sync)} rows (approx 48hrs).")
     except Exception as e:
         print(f"⚠️ Vault sync delay: {e}")
