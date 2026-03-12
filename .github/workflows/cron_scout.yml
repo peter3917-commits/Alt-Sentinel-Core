@@ -1,0 +1,52 @@
+name: 5-Minute Price Scout (Alt-Sentinel)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  repository_dispatch:
+    types: [ping_vance]
+  workflow_dispatch:
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas gspread google-auth requests
+
+      - name: Run Scout
+        env:
+          # These must be added to GitHub Settings > Secrets > Actions
+          GSHEETS_SECRET: ${{ secrets.GSHEETS_JSON }}
+          GSHEET_ID: ${{ secrets.GSHEET_ID }}
+        run: python scout_job.py
+
+      - name: Commit and Push Trade Log
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config --local user.email "vance@alt-sentinel.ai"
+          git config --local user.name "Vance (Background Scout)"
+          
+          # Adding -f to ensure trades.csv is tracked if it exists
+          git add -f trades.csv || true
+          
+          if git diff --cached --quiet; then
+            echo "No new trades recorded by Jace. Skipping push."
+          else
+            git commit -m "Jace updated the Ledger [skip ci]"
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
+          fi
