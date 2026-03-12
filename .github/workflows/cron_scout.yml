@@ -1,4 +1,5 @@
 name: External Trigger
+
 on:
 repository_dispatch:
 types: [ping-sentinel]
