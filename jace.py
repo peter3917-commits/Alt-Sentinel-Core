@@ -3,106 +3,88 @@ import os
 from datetime import datetime
 import numpy as np
 
-def calculate_rsi(series, period=100):
-    """100-Point RSI for smoothed trend analysis."""
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_wma(prices, period=5):
-    """Jace's Weighted Moving Average."""
-    if len(prices) < period:
-        return prices[-1]
-    weights = np.arange(1, period + 1)
-    return (prices[-period:] * weights).sum() / weights.sum()
-
-def execute_trade(asset, current_price, average, history_df=None, ledger_df=None):
+def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
     """
     Jace: High-Precision Execution Agent (Sentinel 2.0).
-    Now with 100pt RSI Crossover, £100 fixed wagers, and 10% Trailing Profits.
+    Focus: Execution of the £100 wager and managing the Trailing Profit ratchet.
     """
     # --- TICKER BRIDGE ---
     ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
     search_asset = ticker_map.get(asset.upper(), asset).upper()
 
     # --- INSTITUTIONAL SETTINGS ---
-    WAGER_SIZE = 100.0        # Fixed £100 wager
-    STOP_LOSS_PCT = 3.5      # Fixed -3.5% Stop Loss
-    TRAILING_PCT = 10.0      # 10% Trailing Profit from Peak
-    SNAP_THRESHOLD = -2.0    # Entry trigger at -2% below Magnet
+    WAGER_SIZE = 100.0        # Fixed £100 wager per trade
+    STOP_LOSS_PCT = 3.5      # Fixed -3.5% Emergency Stop Loss from Entry
+    TRAILING_PCT = 10.0      # 10% Trailing Profit from the Peak (High-Water Mark)
+    SNAP_THRESHOLD = -2.0    # Kael's Snap trigger requirement
 
     # --- SAFETY SHIELD ---
-    if current_price is None or average is None or average == 0 or history_df is None:
-        return 0.0, 0.0, "WAITING", None
+    if current_price is None or average is None or average == 0:
+        return "WAITING", None
 
-    # --- INDICATOR PREP ---
-    history_df['rsi_100'] = calculate_rsi(history_df['Balance'], period=100)
-    current_rsi = history_df['rsi_100'].iloc[-1]
-    prev_rsi = history_df['rsi_100'].iloc[-2] if len(history_df) > 1 else current_rsi
-    
-    # --- 1. ACTIVE TRADE MONITORING (LEDGER) ---
+    # --- 1. ACTIVE TRADE MONITORING (LEDGER RECONCILIATION) ---
     if ledger_df is not None and not ledger_df.empty:
         try:
-            # Normalize ledger for searching
-            df = ledger_df.copy()
-            df.columns = [c.lower().strip() for c in df.columns]
+            # Search for an OPEN trade for this specific asset
+            # We use 'result_clean' to check status and 'asset' for the ticker
+            mask = (ledger_df['asset'].str.upper() == search_asset) & (ledger_df['result_clean'].str.upper() == 'OPEN')
             
-            for i in range(len(df)):
-                csv_asset = str(df.iloc[i]['asset']).strip().upper()
-                # We use 'result_clean' (col 8) to check if OPEN
-                is_open = str(df.iloc[i]['result_clean']).strip().upper() == 'OPEN'
+            if mask.any():
+                # Get the most recent open trade
+                trade_idx = ledger_df[mask].index[-1]
+                entry_price = float(ledger_df.at[trade_idx, 'price'])
+                # 'result' column stores our 'High-Water Mark' (Peak Price)
+                peak_price = float(ledger_df.at[trade_idx, 'result']) 
                 
-                if is_open and csv_asset == search_asset:
-                    entry_price = float(df.iloc[i]['price'])
-                    # Peak Price is stored in the 'result' column (col 6)
-                    peak_price = float(df.iloc[i]['result']) 
-                    
-                    # Update Peak Price in real-time
-                    new_peak = max(current_price, peak_price)
-                    perf_from_entry = ((current_price - entry_price) / entry_price) * 100
-                    perf_from_peak = ((current_price - new_peak) / new_peak) * 100
+                # Update Peak Price if the current price is higher (The Ratchet)
+                new_peak = max(current_price, peak_price)
+                
+                # PERFORMANCE CALCULATIONS
+                perf_from_entry = ((current_price - entry_price) / entry_price) * 100
+                perf_from_peak = ((current_price - new_peak) / new_peak) * 100
+                total_pnl_pct = ((current_price / entry_price) * 100) - 100
 
-                    # EXIT LOGIC
-                    hit_stop = perf_from_entry <= -STOP_LOSS_PCT
-                    hit_trail = perf_from_peak <= -TRAILING_PCT
-                    hit_rsi_overheat = current_rsi > 75
+                # --- EXIT LOGIC ---
+                # A: Fixed Stop Loss (If it drops immediately)
+                hit_stop = perf_from_entry <= -STOP_LOSS_PCT
+                
+                # B: Trailing Profit (If it rose and then dropped 10% from peak)
+                hit_trail = perf_from_peak <= -TRAILING_PCT
+                
+                # C: Fatigue Overheat (RSI Exhaustion)
+                hit_rsi_overheat = rsi > 75
 
-                    if hit_stop or hit_trail or hit_rsi_overheat:
-                        outcome = "LOSS" if hit_stop else "WIN_TRAIL"
-                        if hit_rsi_overheat: outcome = "WIN_RSI"
-                        
-                        qty = WAGER_SIZE / entry_price
-                        final_pnl = (qty * current_price) - WAGER_SIZE
-                        
-                        trade_update = {
-                            "index": i,
-                            "price": current_price,
-                            "profit_usd": final_pnl,
-                            "result_clean": "CLOSED"
-                        }
-                        return final_pnl, final_pnl, outcome, trade_update
+                if hit_stop or hit_trail or hit_rsi_overheat:
+                    reason = "STOP_LOSS" if hit_stop else "TRAILING_PROFIT"
+                    if hit_rsi_overheat: reason = "RSI_EXHAUSTION"
                     
-                    # If no exit, update the Peak Price in Ledger if it moved up
-                    if new_peak > peak_price:
-                        return 0.0, 0.0, "PEAK_UPDATE", {"index": i, "new_peak": new_peak}
-                    
-                    return 0.0, 0.0, "OPEN", None
+                    trade_update = {
+                        "index": trade_idx,
+                        "price": current_price,
+                        "profit_usd": total_pnl_pct,
+                        "reason": reason
+                    }
+                    return "CLOSE", trade_update
+                
+                # --- PEAK UPDATE ---
+                # If no exit, but the price hit a new high, tell Piper to move the goalposts
+                if new_peak > peak_price:
+                    return "PEAK_UPDATE", {"index": trade_idx, "new_peak": new_peak}
+                
+                return "HOLDING", {"pnl": total_pnl_pct}
+                
         except Exception as e:
-            print(f"Jace Audit Error: {e}")
+            print(f"🏛️ JACE AUDIT ERROR: {e}")
 
     # --- 2. NEW TRADE ANALYSIS (ENTRY) ---
+    # Jace only acts if Kael’s intelligence confirms the Snap AND the Hook
     snap_pct = ((current_price - average) / average) * 100
     
-    # Trigger: Price is snapped AND RSI was < 35 and just crossed back up
-    can_buy = (snap_pct <= SNAP_THRESHOLD) and (prev_rsi < 35 and current_rsi >= 35)
-
-    # --- 3. EXECUTION ---
-    if can_buy:
+    # Kael's Entry Condition: Deep Snap + Price Turning Up (Hook)
+    if snap_pct <= SNAP_THRESHOLD and hook:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # Columns: timestamp, asset, type, price, wager, result (peak), profit, result_clean
+        # Ledger Columns: [timestamp, asset, type, price, wager, result (peak), profit, result_clean]
         trade_info = [ts, search_asset, "BUY", current_price, WAGER_SIZE, current_price, 0.0, "OPEN"]
-        return 0.0, 0.0, "BUY", trade_info
+        return "BUY", trade_info
 
-    return 0.0, 0.0, "SCANNING", None
+    return "SCANNING", None
