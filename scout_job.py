@@ -18,7 +18,6 @@ try:
     if not sheet_id:
         raise ValueError("GSHEET_ID environment variable is missing!")
         
-    # Connect to the two critical sheets
     vault_sheet = client.open_by_key(sheet_id).worksheet("Vault")
     ledger_sheet = client.open_by_key(sheet_id).worksheet("Ledger")
 except Exception as e:
@@ -30,6 +29,7 @@ raw_vault = vault_sheet.get_all_records()
 df = pd.DataFrame(raw_vault)
 
 if not df.empty:
+    # Ensure capitalization matches logic
     df.columns = [c.capitalize() if c.lower() == 'asset' else c for c in df.columns]
     df['Timestamp'] = pd.to_datetime(df['Timestamp'])
     last_ts = df['Timestamp'].max()
@@ -39,7 +39,7 @@ else:
 
 now = datetime.utcnow()
 
-# --- GAP HEALER (No changes to your logic) ---
+# --- GAP HEALER (No changes to logic) ---
 gap_seconds = (now - last_ts).total_seconds()
 if gap_seconds > 420 and not df.empty:
     missing_slots = int(gap_seconds // 300)
@@ -62,40 +62,48 @@ for asset_name in ASSETS.keys():
 df = df.drop_duplicates(subset=['Timestamp', 'Asset']).sort_values('Timestamp')
 
 # --- B. KAEL & JACE: SECTOR ANALYSIS & LEDGER MANAGEMENT ---
-# Fetch Ledger data once to pass to Jace
 raw_ledger = ledger_sheet.get_all_records()
 ledger_df = pd.DataFrame(raw_ledger)
+
+# Clean ledger column names for Jace
+if not ledger_df.empty:
+    ledger_df.columns = [c.lower().strip() for c in ledger_df.columns]
 
 for asset_name in ASSETS.keys():
     asset_df = df[df['Asset'] == asset_name].copy()
     if not asset_df.empty:
-        asset_df['Balance'] = pd.to_numeric(asset_df['Balance'])
-        magnet = asset_df['Balance'].tail(288).mean() # 24hr Magnet
-        current_price = float(asset_df['Balance'].iloc[-1])
+        # 🏛️ KAEL: ANALYZE DATA
+        # We rename Balance to price_usd so Kael's internal logic doesn't trip
+        analysis = kael.check_for_snap(asset_name, float(asset_df['Balance'].iloc[-1]), asset_df.rename(columns={"Balance": "price_usd"}))
         
-        # JACE EXECUTION
-        pnl, live_pnl, outcome, action_data = jace.execute_trade(
-            asset_name, current_price, magnet, history_df=asset_df, ledger_df=ledger_df
-        )
-        
-        # --- C. LEDGER UPDATER (Handling Jace's Returns) ---
-        if outcome == "BUY":
-            ledger_sheet.append_row(action_data)
-            print(f"🚀 {asset_name}: Position Opened at ${current_price}")
+        if analysis and analysis[0] is not None:
+            moving_avg, snap_pct, rsi_val, hook_found = analysis
+            current_price = float(asset_df['Balance'].iloc[-1])
             
-        elif outcome in ["LOSS", "WIN_TRAIL", "WIN_RSI"]:
-            idx = action_data['index'] + 2 # Adjust for header/1-base
-            ledger_sheet.update_cell(idx, 6, action_data['price'])        # Final Price
-            ledger_sheet.update_cell(idx, 7, action_data['profit_usd'])  # Final PnL
-            ledger_sheet.update_cell(idx, 8, "CLOSED")                  # Close Status
-            print(f"💰 {asset_name}: Position {outcome} Closed. PnL: £{action_data['profit_usd']:.2f}")
+            # 🏛️ JACE: EXECUTE TRADE
+            # FIXED: Removed history_df and added rsi_val, hook_found
+            outcome, action_data = jace.execute_trade(
+                asset_name, current_price, moving_avg, rsi_val, hook_found, ledger_df
+            )
+            
+            # --- C. LEDGER UPDATER (Handling Jace's Returns) ---
+            if outcome == "BUY":
+                ledger_sheet.append_row(action_data)
+                print(f"🚀 {asset_name}: Position Opened at ${current_price}")
+                
+            elif outcome == "CLOSE":
+                idx = action_data['index'] + 2 # Adjust for header/1-base
+                ledger_sheet.update_cell(idx, 6, action_data.get('price', current_price)) # Final Price
+                ledger_sheet.update_cell(idx, 7, action_data['profit_usd'])              # Final PnL %
+                ledger_sheet.update_cell(idx, 8, "CLOSED")                              # Close Status
+                print(f"💰 {asset_name}: Closed via {action_data['reason']}. PnL: {action_data['profit_usd']:.2f}%")
 
-        elif outcome == "PEAK_UPDATE":
-            idx = action_data['index'] + 2
-            ledger_sheet.update_cell(idx, 6, action_data['new_peak']) # Update Peak in 'result' col
-            print(f"📈 {asset_name}: New Peak Recorded: ${action_data['new_peak']:.4f}")
+            elif outcome == "PEAK_UPDATE":
+                idx = action_data['index'] + 2
+                ledger_sheet.update_cell(idx, 6, action_data['new_peak']) # Update Peak in 'result' col
+                print(f"📈 {asset_name}: New Peak Recorded: ${action_data['new_peak']:.6f}")
 
-        print(f"Sect: {asset_name} | Price: ${current_price:.6f} | Magnet: ${magnet:.6f} | Jace: {outcome}")
+            print(f"Sect: {asset_name} | Price: ${current_price:.6f} | RSI: {rsi_val:.1f} | Jace: {outcome}")
 
 # --- D. THE JANITOR & VAULT SYNC ---
 cutoff = datetime.utcnow() - timedelta(hours=50)
