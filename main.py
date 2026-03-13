@@ -56,13 +56,14 @@ with tab1:
                     # PRECISION OVERHAUL: Changed to 6 decimal places for low-price assets
                     c1.metric(f"Live {coin}", f"${price:,.6f}")
                     
+                    # 🏛️ KAEL: ANALYZE DATA
                     analysis = kael.check_for_snap(coin, price, asset_history.rename(columns={bal_col: "price_usd"}))
                     if analysis and analysis[0] is not None:
                         moving_avg, snap_pct, rsi_val, hook_found = analysis
                         c2.metric("Avg Window", f"${moving_avg:,.6f}") # Precision 6dp
                         st_color = "normal" if snap_pct > 0 else "inverse"
                         c3.metric("Snap %", f"{snap_pct:.3f}%", delta=f"{snap_pct:.3f}%", delta_color=st_color)
-                        c4.metric("RSI (14)", f"{rsi_val:.1f}")
+                        c4.metric("RSI (100)", f"{rsi_val:.1f}")
                         
                         # --- 📈 24H SECTOR VISUALIZATION ---
                         chart_cutoff = datetime.now().replace(tzinfo=None) - timedelta(hours=24)
@@ -86,36 +87,50 @@ with tab1:
                         st.divider()
                         st.subheader(f"Jace: {coin} Execution")
                         
-                        gross, net, outcome, trade_data = jace.execute_trade(
-                            coin, price, moving_avg, rsi=rsi_val, 
-                            history_df=asset_history, ledger_df=live_ledger_df
+                        # 🏛️ JACE: EXECUTE DECISION
+                        # Passing Kael's results (rsi, hook) to Jace
+                        outcome, action_data = jace.execute_trade(
+                            coin, price, moving_avg, rsi_val, hook_found, live_ledger_df
                         )
                         
-                        # --- GOOGLE SHEETS SYNC LOGIC ---
-                        if outcome == "BUY" and trade_data:
-                            new_row = pd.DataFrame([trade_data], columns=['timestamp','asset','type','price','wager','result','profit_usd'])
+                        # --- 🏛️ PIPER: ACCOUNTING OFFICE SYNC ---
+                        
+                        # 1. NEW BUY LOGGING
+                        if outcome == "BUY" and action_data:
+                            new_row = pd.DataFrame([action_data], columns=live_ledger_df.columns)
                             updated_df = pd.concat([live_ledger_df, new_row], ignore_index=True)
                             conn.update(worksheet="Ledger", data=updated_df)
-                            st.success(f"🚀 NEW TRADE LOGGED: {coin}")
+                            st.success(f"🚀 NEW TRADE LOGGED: {coin} at ${price:.6f}")
                             st.rerun()
 
-                        elif outcome in ["WIN_MOONSHOT", "WIN_TRAILING", "LOSS"] and trade_data:
-                            idx_to_update = trade_data['index']
-                            live_ledger_df.at[idx_to_update, 'result'] = trade_data['result']
-                            live_ledger_df.at[idx_to_update, 'profit_usd'] = trade_data['profit_usd']
+                        # 2. PEAK UPDATING (Trailing Sell Logic)
+                        elif outcome == "PEAK_UPDATE" and action_data:
+                            idx = action_data['index']
+                            # Update the 'result' column in the sheet with the new High-Water Mark
+                            live_ledger_df.at[idx, 'result'] = action_data['new_peak']
                             conn.update(worksheet="Ledger", data=live_ledger_df)
-                            st.warning(f"🎯 TRADE CLOSED: {coin} ({outcome})")
+                            st.toast(f"📈 {coin} Peak Updated: ${action_data['new_peak']:.6f}", icon="🚀")
+
+                        # 3. TRADE CLOSING (Fixed Stop or 10% Trailing Profit)
+                        elif outcome == "CLOSE" and action_data:
+                            idx = action_data['index']
+                            live_ledger_df.at[idx, 'result_clean'] = "CLOSED"
+                            live_ledger_df.at[idx, 'profit_usd'] = action_data['profit_usd']
+                            # We record the final exit price in 'result' before closing
+                            live_ledger_df.at[idx, 'result'] = action_data.get('price', price)
+                            conn.update(worksheet="Ledger", data=live_ledger_df)
+                            st.warning(f"🎯 TRADE CLOSED: {coin} ({action_data['reason']})")
                             st.rerun()
 
                         # --- DISPLAY STATUS ---
-                        if outcome == "OPEN":
-                            st.info(f"⏳ Trade is OPEN. Floating P/L: £{net:.2f}")
-                        elif "WIN" in outcome:
-                            st.success(f"🎯 Outcome: {outcome} (£{net:.2f})")
-                        elif outcome == "LOSS":
-                            st.error(f"⚠️ Outcome: {outcome} (£{net:.2f})")
+                        if outcome == "HOLDING":
+                            # Calculate floating P/L for the UI
+                            st.info(f"⏳ Jace is guarding the trend. Tracking Trailing Profit...")
+                        elif outcome == "SCANNING":
+                            st.write(f"⚖️ Jace is scanning {coin} sectors...")
                         else:
-                            st.write(f"⚖️ Jace is holding {coin}.")
+                            st.write(f"🛡️ Current Sector Status: {outcome}")
+
                     else:
                         c2.info(f"📡 {coin}: Scouting...")
     except Exception as e:
@@ -127,7 +142,6 @@ with tab2:
     try:
         v_df = conn.read(worksheet="Vault", ttl=0)
         current_prices = {}
-        # UPDATED: Mapping for Alt-Sentinel Sector
         ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
         
         if not v_df.empty:
@@ -176,7 +190,6 @@ with tab2:
                         lambda x: f'color: {"#00ff00" if x > 0 else "#ff4b4b" if x < 0 else "white"}', 
                         subset=['Return (%)', 'P/L ($)']
                     ).format({
-                        # PRECISION OVERHAUL: Set to 6dp for the ledger view
                         'Entry Price': '${:,.6f}', 'MTM Price': '${:,.6f}',
                         'Return (%)': '{:,.2f}%', 'P/L ($)': '£{:,.2f}'
                     }),
