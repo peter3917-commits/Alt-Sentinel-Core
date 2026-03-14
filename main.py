@@ -60,6 +60,17 @@ with tab1:
         st.sidebar.write(f"Vault Records: {len(vault_df)}")
         st.sidebar.write(f"Ledger Records: {len(live_ledger_df)}")
 
+        # --- 🏛️ STAFF MANIFESTO (ADDED FOR TRANSPARENCY) ---
+        st.sidebar.divider()
+        st.sidebar.subheader("📋 Active Staff Policy")
+        with st.sidebar.expander("Live Execution Parameters", expanded=True):
+            policy_data = {
+                "Agent": ["Jace", "Jace", "Jace", "Jace", "Kael", "Kael"],
+                "Parameter": ["Stop Loss", "Profit Target", "Trailing Stop", "Entry Snap", "MA Window", "RSI Period"],
+                "Value": ["-3.5%", "2.0%", "10.0%", "-2.0%", "24h (288)", "100"]
+            }
+            st.table(pd.DataFrame(policy_data))
+
         # --- ASSET LOOP ---
         if not vault_df.empty:
             for coin in ASSETS:
