@@ -38,11 +38,12 @@ with tab1:
         if not live_ledger_df.empty:
             live_ledger_df.columns = [str(c).lower().strip() for c in live_ledger_df.columns]
 
-        # --- SYSTEM HEARTBEAT ---
+        # --- 📡 SYSTEM HEARTBEAT & AGENT INTEL ---
         st.sidebar.divider()
-        st.sidebar.subheader("📡 System Heartbeat")
-        st.sidebar.write(f"Vault Records: {len(vault_df)}")
-        st.sidebar.write(f"Ledger Records: {len(live_ledger_df)}")
+        st.sidebar.subheader("📡 Agent Intelligence")
+        
+        # Simple row counts for heartbeat
+        st.sidebar.caption(f"Vault: {len(vault_df)} | Ledger: {len(live_ledger_df)}")
 
         if not vault_df.empty:
             bal_col = 'balance' if 'balance' in vault_df.columns else 'price_usd'
@@ -54,16 +55,41 @@ with tab1:
                 with st.container():
                     price = vance.scout_live_price(coin)
                     if price:
+                        # --- SIDEBAR AGENT INTEL FOR EACH COIN ---
+                        active_mask = (live_ledger_df['asset'].str.upper() == coin.upper()) & (live_ledger_df['result_clean'].str.upper() == 'OPEN')
+                        active_trade = live_ledger_df[active_mask]
+                        
+                        if not active_trade.empty:
+                            entry = float(active_trade.iloc[-1]['price'])
+                            peak = float(active_trade.iloc[-1]['result'])
+                            pnl = ((price - entry) / entry) * 100
+                            
+                            with st.sidebar.expander(f"🟢 {coin} Intel", expanded=True):
+                                # Logic mirroring Jace.py for real-time reporting
+                                fixed_stop = entry * 0.965  # 3.5% Floor
+                                trail_stop = peak * 0.90    # 10% Trail
+                                target_2pct = entry * 1.02  # Dead Zone Barrier
+                                
+                                st.write(f"**P/L:** {pnl:.2f}%")
+                                if pnl < 2.0:
+                                    st.info("⏳ Phase: Dead Zone (Under 2%)")
+                                    st.caption(f"Target to activate RSI: `${target_2pct:.6f}`")
+                                else:
+                                    st.success("🎯 Phase: Harvest (RSI & Trail Active)")
+                                
+                                st.caption(f"🛡️ Emergency Stop: `${fixed_stop:.6f}`")
+                                st.caption(f"📈 Trailing Floor: `${trail_stop:.6f}`")
+
+                        # --- MAIN DASHBOARD DISPLAY ---
                         st.divider()
                         st.header(f"🛰️ Sector: {coin}")
                         
-                        # Institutional Filter: Case-Insensitive Matching
                         asset_history = vault_df[vault_df['asset'].str.upper() == coin.upper()].copy()
                         cutoff = datetime.now() - timedelta(hours=72)
                         asset_history = asset_history[asset_history['timestamp'] > cutoff]
                         
                         if asset_history.empty:
-                            st.warning(f"📡 {coin}: Data exists in Vault, but none in the last 72h. Check Scout_job.")
+                            st.warning(f"📡 {coin}: Data exists in Vault, but none in the last 72h.")
                             continue
 
                         c1, c2, c3, c4 = st.columns(4)
@@ -106,7 +132,7 @@ with tab1:
                                 live_ledger_df.at[idx, 'profit_usd'] = action_data['profit_usd']
                                 live_ledger_df.at[idx, 'result'] = action_data.get('price', price)
                                 conn.update(worksheet="Ledger", data=live_ledger_df)
-                                st.warning(f"🎯 CLOSED: {coin}")
+                                st.warning(f"🎯 CLOSED: {coin} | Reason: {action_data.get('reason', 'N/A')}")
                                 st.rerun()
 
                             elif outcome == "PEAK_UPDATE" and action_data:
