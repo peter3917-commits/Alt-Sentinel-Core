@@ -27,71 +27,71 @@ with tab1:
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # 1. FETCH & NORMALIZE VAULT (Sheet 1)
+        # 1. FETCH VAULT (Sheet 1)
         vault_df = conn.read(worksheet="Vault", ttl=0)
-        if not vault_df.empty:
-            vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
         
-        # 2. FETCH & NORMALIZE LEDGER (Sheet 2)
+        # 2. FETCH LEDGER (Sheet 2)
         ledger_data = piper.get_firm_ledger(conn)
         live_ledger_df = ledger_data['trades_df']
+
+        # --- DATA HARDENING (Prevent the "Vanishing" bug) ---
+        if not vault_df.empty:
+            vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
+            # Use 'price_usd' or 'balance' depending on your sheet naming
+            bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
+            
+            # Safe Numeric Conversion
+            vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
+            
+            # Safe Timestamp Conversion (Flexible for different formats)
+            vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
+            # Only localize if it's not already naive
+            if vault_df['timestamp'].dt.tz is not None:
+                vault_df['timestamp'] = vault_df['timestamp'].dt.tz_localize(None)
+            
+            vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
+
         if not live_ledger_df.empty:
             live_ledger_df.columns = [str(c).lower().strip() for c in live_ledger_df.columns]
 
-        # --- 📡 SYSTEM HEARTBEAT & AGENT INTEL ---
+        # --- SYSTEM HEARTBEAT ---
         st.sidebar.divider()
-        st.sidebar.subheader("📡 Agent Intelligence")
-        
-        # Simple row counts for heartbeat
-        st.sidebar.caption(f"Vault: {len(vault_df)} | Ledger: {len(live_ledger_df)}")
+        st.sidebar.subheader("📡 System Heartbeat")
+        st.sidebar.write(f"Vault Records: {len(vault_df)}")
+        st.sidebar.write(f"Ledger Records: {len(live_ledger_df)}")
 
+        # --- ASSET LOOP ---
         if not vault_df.empty:
-            bal_col = 'balance' if 'balance' in vault_df.columns else 'price_usd'
-            vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
-            vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce').dt.tz_localize(None)
-            vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
-
             for coin in ASSETS:
-                with st.container():
-                    price = vance.scout_live_price(coin)
-                    if price:
-                        # --- SIDEBAR AGENT INTEL FOR EACH COIN ---
-                        active_mask = (live_ledger_df['asset'].str.upper() == coin.upper()) & (live_ledger_df['result_clean'].str.upper() == 'OPEN')
-                        active_trade = live_ledger_df[active_mask]
-                        
-                        if not active_trade.empty:
-                            entry = float(active_trade.iloc[-1]['price'])
-                            peak = float(active_trade.iloc[-1]['result'])
-                            pnl = ((price - entry) / entry) * 100
-                            
-                            with st.sidebar.expander(f"🟢 {coin} Intel", expanded=True):
-                                # Logic mirroring Jace.py for real-time reporting
-                                fixed_stop = entry * 0.965  # 3.5% Floor
-                                trail_stop = peak * 0.90    # 10% Trail
-                                target_2pct = entry * 1.02  # Dead Zone Barrier
-                                
-                                st.write(f"**P/L:** {pnl:.2f}%")
-                                if pnl < 2.0:
-                                    st.info("⏳ Phase: Dead Zone (Under 2%)")
-                                    st.caption(f"Target to activate RSI: `${target_2pct:.6f}`")
-                                else:
-                                    st.success("🎯 Phase: Harvest (RSI & Trail Active)")
-                                
-                                st.caption(f"🛡️ Emergency Stop: `${fixed_stop:.6f}`")
-                                st.caption(f"📈 Trailing Floor: `${trail_stop:.6f}`")
+                price = vance.scout_live_price(coin)
+                if price:
+                    # Institutional Filter: Case-Insensitive Matching
+                    asset_history = vault_df[vault_df['asset'].str.upper() == coin.upper()].copy()
+                    
+                    # Cutoff for Analysis (72h)
+                    cutoff = datetime.now() - timedelta(hours=72)
+                    asset_history = asset_history[asset_history['timestamp'] > cutoff]
+                    
+                    if asset_history.empty:
+                        st.warning(f"📡 {coin}: No data in last 72h. Check Scout_job.")
+                        continue
 
-                        # --- MAIN DASHBOARD DISPLAY ---
+                    # --- SIDEBAR INTEL (Emergency Stop / Trail / Dead Zone) ---
+                    active_trade = live_ledger_df[(live_ledger_df['asset'].str.upper() == coin.upper()) & 
+                                                  (live_ledger_df['result_clean'].str.upper() == 'OPEN')]
+                    
+                    if not active_trade.empty:
+                        entry = float(active_trade.iloc[-1]['price'])
+                        peak = float(active_trade.iloc[-1]['result'])
+                        with st.sidebar.expander(f"🟢 {coin} Intel", expanded=True):
+                            st.caption(f"🛡️ Stop: `${(entry * 0.965):,.6f}`")
+                            st.caption(f"📈 Trail: `${(peak * 0.90):,.6f}`")
+                            if price < (entry * 1.02):
+                                st.info("🔒 Status: Dead Zone")
+
+                    with st.container():
                         st.divider()
                         st.header(f"🛰️ Sector: {coin}")
-                        
-                        asset_history = vault_df[vault_df['asset'].str.upper() == coin.upper()].copy()
-                        cutoff = datetime.now() - timedelta(hours=72)
-                        asset_history = asset_history[asset_history['timestamp'] > cutoff]
-                        
-                        if asset_history.empty:
-                            st.warning(f"📡 {coin}: Data exists in Vault, but none in the last 72h.")
-                            continue
-
                         c1, c2, c3, c4 = st.columns(4)
                         c1.metric(f"Live {coin}", f"${price:,.6f}")
                         
@@ -119,32 +119,22 @@ with tab1:
                             outcome, action_data = jace.execute_trade(coin, price, moving_avg, rsi_val, hook_found, live_ledger_df)
                             
                             if outcome == "BUY" and action_data:
-                                cols = ['timestamp', 'asset', 'type', 'price', 'wager', 'result', 'profit_usd', 'result_clean']
-                                new_row = pd.DataFrame([action_data], columns=cols)
-                                updated_df = pd.concat([live_ledger_df, new_row], ignore_index=True)
+                                updated_df = pd.concat([live_ledger_df, pd.DataFrame([action_data])], ignore_index=True)
                                 conn.update(worksheet="Ledger", data=updated_df)
-                                st.success(f"🚀 POSITION OPENED: {coin}")
                                 st.rerun()
                             
-                            elif outcome == "CLOSE" and action_data:
+                            elif outcome in ["CLOSE", "PEAK_UPDATE"] and action_data:
+                                # Logic for updating existing ledger rows
                                 idx = action_data['index']
-                                live_ledger_df.at[idx, 'result_clean'] = "CLOSED"
-                                live_ledger_df.at[idx, 'profit_usd'] = action_data['profit_usd']
-                                live_ledger_df.at[idx, 'result'] = action_data.get('price', price)
+                                if outcome == "CLOSE":
+                                    live_ledger_df.at[idx, 'result_clean'] = "CLOSED"
+                                    live_ledger_df.at[idx, 'profit_usd'] = action_data['profit_usd']
+                                else:
+                                    live_ledger_df.at[idx, 'result'] = action_data['new_peak']
                                 conn.update(worksheet="Ledger", data=live_ledger_df)
-                                st.warning(f"🎯 CLOSED: {coin} | Reason: {action_data.get('reason', 'N/A')}")
                                 st.rerun()
-
-                            elif outcome == "PEAK_UPDATE" and action_data:
-                                idx = action_data['index']
-                                live_ledger_df.at[idx, 'result'] = action_data['new_peak']
-                                conn.update(worksheet="Ledger", data=live_ledger_df)
-                                st.toast(f"📈 {coin} Peak: ${action_data['new_peak']:.6f}")
-
-                            st.caption(f"Status: {outcome}")
-
         else:
-            st.error("Vault sheet is empty. Please run Scout_job to populate data.")
+            st.error("Vault sheet is currently empty or unreadable.")
 
     except Exception as e:
         st.error(f"Sentinel System Error: {e}")
@@ -165,7 +155,5 @@ with tab2:
             st.divider()
             desk_df = piper.format_institutional_ledger(ledger['trades_df'], {})
             st.dataframe(desk_df, width="stretch", height=450)
-        else:
-            st.info("The Ledger is currently empty.")
     except Exception as e:
         st.error(f"Accountant Error: {e}")
