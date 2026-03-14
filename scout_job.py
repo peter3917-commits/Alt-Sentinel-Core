@@ -73,7 +73,6 @@ for asset_name in ASSETS.keys():
     asset_df = df[df['Asset'] == asset_name].copy()
     if not asset_df.empty:
         # 🏛️ KAEL: ANALYZE DATA
-        # We rename Balance to price_usd so Kael's internal logic doesn't trip
         analysis = kael.check_for_snap(asset_name, float(asset_df['Balance'].iloc[-1]), asset_df.rename(columns={"Balance": "price_usd"}))
         
         if analysis and analysis[0] is not None:
@@ -81,26 +80,29 @@ for asset_name in ASSETS.keys():
             current_price = float(asset_df['Balance'].iloc[-1])
             
             # 🏛️ JACE: EXECUTE TRADE
-            # FIXED: Removed history_df and added rsi_val, hook_found
             outcome, action_data = jace.execute_trade(
                 asset_name, current_price, moving_avg, rsi_val, hook_found, ledger_df
             )
             
             # --- C. LEDGER UPDATER (Handling Jace's Returns) ---
+            # Columns: 1:ts, 2:asset, 3:type, 4:price, 5:wager, 6:result(peak), 7:profit_usd, 8:result_clean
             if outcome == "BUY":
+                # action_data is a list of 8 items. append_row handles this perfectly.
                 ledger_sheet.append_row(action_data)
-                print(f"🚀 {asset_name}: Position Opened at ${current_price}")
+                print(f"🚀 {asset_name}: Position Opened at ${current_price:.6f}")
                 
             elif outcome == "CLOSE":
-                idx = action_data['index'] + 2 # Adjust for header/1-base
-                ledger_sheet.update_cell(idx, 6, action_data.get('price', current_price)) # Final Price
-                ledger_sheet.update_cell(idx, 7, action_data['profit_usd'])              # Final PnL %
-                ledger_sheet.update_cell(idx, 8, "CLOSED")                              # Close Status
+                idx = action_data['index'] + 2 # Adjust for header row and 0-indexing
+                # Update Result (Column 6), Profit (Column 7), and Status (Column 8)
+                ledger_sheet.update_cell(idx, 6, action_data.get('price', current_price))
+                ledger_sheet.update_cell(idx, 7, action_data['profit_usd'])
+                ledger_sheet.update_cell(idx, 8, "CLOSED")
                 print(f"💰 {asset_name}: Closed via {action_data['reason']}. PnL: {action_data['profit_usd']:.2f}%")
 
             elif outcome == "PEAK_UPDATE":
                 idx = action_data['index'] + 2
-                ledger_sheet.update_cell(idx, 6, action_data['new_peak']) # Update Peak in 'result' col
+                # Update the Peak Price in Column 6 (result)
+                ledger_sheet.update_cell(idx, 6, action_data['new_peak'])
                 print(f"📈 {asset_name}: New Peak Recorded: ${action_data['new_peak']:.6f}")
 
             print(f"Sect: {asset_name} | Price: ${current_price:.6f} | RSI: {rsi_val:.1f} | Jace: {outcome}")
