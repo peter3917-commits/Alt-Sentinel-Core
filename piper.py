@@ -51,7 +51,7 @@ def get_firm_ledger(conn, prices_dict=None):
         
         vault_cash = float(INITIAL_CAPITAL + realized - burn)
         
-        # Deduct wagers for currently OPEN trades
+        # Deduct wagers for currently OPEN trades (Case-insensitive check)
         locked_wagers = float(df[df['status_check'] == 'open']['wager'].sum())
 
         return {
@@ -76,7 +76,6 @@ def get_live_price(asset, prices_dict):
     for k, v in prices_dict.items():
         if v is not None:
             try:
-                # Precision Shield: Ensure we don't round off micro-cents
                 val = float(str(v).replace(',', '').replace('$', '').strip())
                 clean_prices[str(k).strip().upper()] = val
             except:
@@ -106,7 +105,6 @@ def calculate_unrealized(trades_df, prices_dict):
         return 0.0, pd.DataFrame()
     
     unreal_total = 0.0
-    # Use the status_check logic
     trades_df['status_check'] = trades_df['result_clean'].astype(str).str.lower().str.strip()
     open_trades = trades_df[trades_df['status_check'] == 'open'].copy()
     
@@ -116,7 +114,7 @@ def calculate_unrealized(trades_df, prices_dict):
         wager = float(row.get('wager', 0))
         
         if live_p is not None and entry_p > 0:
-            # High-precision P/L logic
+            # P/L logic: (live - entry) / entry * wager
             pnl = wager * ((live_p - entry_p) / entry_p)
             unreal_total += pnl
             open_trades.at[idx, 'profit_usd'] = pnl
@@ -135,21 +133,22 @@ def format_institutional_ledger(df, prices_dict):
         res_clean = row.get('status_check', 'unknown')
         entry_p = float(row.get('price', 0))
         wager = float(row.get('wager', 0))
-        peak_p = float(row.get('result', entry_p)) # High-water mark
+        peak_p = float(row.get('result', entry_p)) 
         
         if res_clean == 'open':
             status = "🟢 ACTIVE"
             live_p = get_live_price(asset_name, prices_dict)
             mtm = float(live_p) if live_p is not None else entry_p
-            pnl = wager * ((mtm - entry_p) / entry_p) if entry_p > 0 else 0
+            # Return as %
+            ret_pct = ((mtm - entry_p) / entry_p) * 100 if entry_p > 0 else 0
+            pnl_val = wager * (ret_pct / 100)
         else:
             status = "✅ CLOSED"
-            pnl = float(row.get('profit_usd', 0))
-            # For closed trades, MTM Price is effectively the exit price
-            mtm = entry_p * (1 + (pnl / 100)) if entry_p > 0 else entry_p
+            ret_pct = float(row.get('profit_usd', 0)) # Jace stores percentage in profit_usd for closed trades
+            pnl_val = wager * (ret_pct / 100)
+            # MTM is exit price
+            mtm = float(row.get('result', entry_p)) 
             
-        ret_pct = (pnl) # In Jace's new logic, we store profit_usd as a percentage
-        
         try:
             ts = pd.to_datetime(row.get('timestamp')).tz_localize(None)
             diff = now - ts
@@ -161,9 +160,9 @@ def format_institutional_ledger(df, prices_dict):
             "Status": status, 
             "Age": age_str,
             "Entry Price": entry_p,
-            "Peak Price": peak_p, # Now visible in the ledger!
+            "Peak Price": peak_p,
             "MTM Price": mtm,
             "Return (%)": ret_pct, 
-            "P/L ($)": (wager * (ret_pct / 100))
+            "P/L ($)": pnl_val
         })
     return pd.DataFrame(report)
