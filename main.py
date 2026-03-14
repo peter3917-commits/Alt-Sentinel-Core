@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
-import vance, kael, jace, piper  # UPDATED: New Agent Identities
+import vance, kael, jace, piper  # AGENT IDENTITIES
 from datetime import datetime, timedelta
 import altair as alt
 
@@ -53,14 +53,13 @@ with tab1:
                     asset_history = asset_history[asset_history['timestamp'] > cutoff]
                     
                     c1, c2, c3, c4 = st.columns(4)
-                    # PRECISION OVERHAUL: Changed to 6 decimal places for low-price assets
                     c1.metric(f"Live {coin}", f"${price:,.6f}")
                     
                     # 🏛️ KAEL: ANALYZE DATA
                     analysis = kael.check_for_snap(coin, price, asset_history.rename(columns={bal_col: "price_usd"}))
                     if analysis and analysis[0] is not None:
                         moving_avg, snap_pct, rsi_val, hook_found = analysis
-                        c2.metric("Avg Window", f"${moving_avg:,.6f}") # Precision 6dp
+                        c2.metric("Avg Window", f"${moving_avg:,.6f}")
                         st_color = "normal" if snap_pct > 0 else "inverse"
                         c3.metric("Snap %", f"{snap_pct:.3f}%", delta=f"{snap_pct:.3f}%", delta_color=st_color)
                         c4.metric("RSI (100)", f"{rsi_val:.1f}")
@@ -77,7 +76,7 @@ with tab1:
                             ).encode(
                                 x=alt.X('timestamp:T', title='Timeline (Last 24h)'),
                                 y=alt.Y('Price:Q', title='Price ($)', scale=alt.Scale(zero=False)),
-                                tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')] # Precision Tooltip
+                                tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                             ).properties(height=200, width="container").interactive()
                             
                             st.altair_chart(line_chart, use_container_width=True)
@@ -88,35 +87,46 @@ with tab1:
                         st.subheader(f"Jace: {coin} Execution")
                         
                         # 🏛️ JACE: EXECUTE DECISION
-                        # Passing Kael's results (rsi, hook) to Jace
                         outcome, action_data = jace.execute_trade(
                             coin, price, moving_avg, rsi_val, hook_found, live_ledger_df
                         )
                         
                         # --- 🏛️ PIPER: ACCOUNTING OFFICE SYNC ---
                         
-                        # 1. NEW BUY LOGGING
+                        # 1. NEW BUY LOGGING (Surgical Fix for Column Mismatch)
                         if outcome == "BUY" and action_data:
-                            new_row = pd.DataFrame([action_data], columns=live_ledger_df.columns)
+                            # 8-Column Institutional Map
+                            cols = ['timestamp', 'asset', 'type', 'price', 'wager', 'result', 'profit_usd', 'result_clean']
+                            
+                            # Build the new row explicitly
+                            new_row = pd.DataFrame([action_data], columns=cols)
+                            
+                            # Harmonize the existing ledger to match headers
+                            if live_ledger_df.empty:
+                                live_ledger_df = pd.DataFrame(columns=cols)
+                            else:
+                                live_ledger_df.columns = [c.lower().strip() for c in live_ledger_df.columns]
+
                             updated_df = pd.concat([live_ledger_df, new_row], ignore_index=True)
                             conn.update(worksheet="Ledger", data=updated_df)
                             st.success(f"🚀 NEW TRADE LOGGED: {coin} at ${price:.6f}")
                             st.rerun()
 
-                        # 2. PEAK UPDATING (Trailing Sell Logic)
+                        # 2. PEAK UPDATING
                         elif outcome == "PEAK_UPDATE" and action_data:
                             idx = action_data['index']
-                            # Update the 'result' column in the sheet with the new High-Water Mark
+                            # Normalize column names before updating to avoid KeyErrors
+                            live_ledger_df.columns = [c.lower().strip() for c in live_ledger_df.columns]
                             live_ledger_df.at[idx, 'result'] = action_data['new_peak']
                             conn.update(worksheet="Ledger", data=live_ledger_df)
                             st.toast(f"📈 {coin} Peak Updated: ${action_data['new_peak']:.6f}", icon="🚀")
 
-                        # 3. TRADE CLOSING (Fixed Stop or 10% Trailing Profit)
+                        # 3. TRADE CLOSING
                         elif outcome == "CLOSE" and action_data:
                             idx = action_data['index']
+                            live_ledger_df.columns = [c.lower().strip() for c in live_ledger_df.columns]
                             live_ledger_df.at[idx, 'result_clean'] = "CLOSED"
                             live_ledger_df.at[idx, 'profit_usd'] = action_data['profit_usd']
-                            # We record the final exit price in 'result' before closing
                             live_ledger_df.at[idx, 'result'] = action_data.get('price', price)
                             conn.update(worksheet="Ledger", data=live_ledger_df)
                             st.warning(f"🎯 TRADE CLOSED: {coin} ({action_data['reason']})")
@@ -124,7 +134,6 @@ with tab1:
 
                         # --- DISPLAY STATUS ---
                         if outcome == "HOLDING":
-                            # Calculate floating P/L for the UI
                             st.info(f"⏳ Jace is guarding the trend. Tracking Trailing Profit...")
                         elif outcome == "SCANNING":
                             st.write(f"⚖️ Jace is scanning {coin} sectors...")
