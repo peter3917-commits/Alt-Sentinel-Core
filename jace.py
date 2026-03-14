@@ -7,6 +7,7 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
     """
     Jace: High-Precision Execution Agent (Sentinel 2.0).
     Focus: Execution of the £100 wager and managing the Trailing Profit ratchet.
+    Policy: No profit-taking until 2% gain is reached.
     """
     # --- TICKER BRIDGE ---
     ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
@@ -15,6 +16,7 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
     # --- INSTITUTIONAL SETTINGS ---
     WAGER_SIZE = 100.0        # Fixed £100 wager per trade
     STOP_LOSS_PCT = 3.5      # Fixed -3.5% Emergency Stop Loss from Entry
+    PROFIT_THRESHOLD = 2.0    # Initial 2% profit target before RSI/Trailing act
     TRAILING_PCT = 10.0      # 10% Trailing Profit from the Peak (High-Water Mark)
     SNAP_THRESHOLD = -2.0    # Kael's Snap trigger requirement
 
@@ -26,13 +28,13 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
     if ledger_df is not None and not ledger_df.empty:
         try:
             # Search for an OPEN trade for this specific asset
-            # We use 'result_clean' to check status and 'asset' for the ticker
             mask = (ledger_df['asset'].str.upper() == search_asset) & (ledger_df['result_clean'].str.upper() == 'OPEN')
             
             if mask.any():
                 # Get the most recent open trade
                 trade_idx = ledger_df[mask].index[-1]
                 entry_price = float(ledger_df.at[trade_idx, 'price'])
+                
                 # 'result' column stores our 'High-Water Mark' (Peak Price)
                 peak_price = float(ledger_df.at[trade_idx, 'result']) 
                 
@@ -44,19 +46,21 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
                 perf_from_peak = ((current_price - new_peak) / new_peak) * 100
                 total_pnl_pct = ((current_price / entry_price) * 100) - 100
 
-                # --- EXIT LOGIC ---
-                # A: Fixed Stop Loss (If it drops immediately)
+                # --- NEW STAFF POLICY: EXIT LOGIC ---
+                
+                # A: Emergency Stop Loss (Always Active)
                 hit_stop = perf_from_entry <= -STOP_LOSS_PCT
                 
-                # B: Trailing Profit (If it rose and then dropped 10% from peak)
-                hit_trail = perf_from_peak <= -TRAILING_PCT
+                # B: Profit Zone Check (Staff Requirement: 2% threshold)
+                is_in_profit_zone = perf_from_entry >= PROFIT_THRESHOLD
                 
-                # C: Fatigue Overheat (RSI Exhaustion)
-                hit_rsi_overheat = rsi > 75
+                # C: Momentum & Trailing (Only active if we have crossed the 2% profit mark)
+                hit_trail = is_in_profit_zone and (perf_from_peak <= -TRAILING_PCT)
+                hit_rsi_exit = is_in_profit_zone and (rsi > 70) # RSI signals exhaustion above 2%
 
-                if hit_stop or hit_trail or hit_rsi_overheat:
-                    reason = "STOP_LOSS" if hit_stop else "TRAILING_PROFIT"
-                    if hit_rsi_overheat: reason = "RSI_EXHAUSTION"
+                if hit_stop or hit_trail or hit_rsi_exit:
+                    reason = "EMERGENCY_STOP" if hit_stop else "TRAILING_PROFIT"
+                    if hit_rsi_exit: reason = "RSI_MOMENTUM_EXIT"
                     
                     trade_update = {
                         "index": trade_idx,
@@ -67,7 +71,7 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
                     return "CLOSE", trade_update
                 
                 # --- PEAK UPDATE ---
-                # If no exit, but the price hit a new high, tell Piper to move the goalposts
+                # If no exit, but the price hit a new high, move the goalposts
                 if new_peak > peak_price:
                     return "PEAK_UPDATE", {"index": trade_idx, "new_peak": new_peak}
                 
