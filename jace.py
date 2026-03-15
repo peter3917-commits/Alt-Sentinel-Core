@@ -5,16 +5,24 @@ import numpy as np
 
 def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
     """
-    Jace: High-Precision Execution Agent (Sentinel 2.0).
-    Focus: Execution of the £100 wager and managing the Trailing Profit ratchet.
-    Policy: No profit-taking until 2% gain is reached.
+    Jace: High-Precision Execution Agent (Sentinel 2.1).
+    Focus: Dynamic Position Sizing (20% Tradable Balance) & Ratchet Profit Management.
+    Policy: Auto-scale wager based on Cash - (Tax + Costs).
     """
     # --- TICKER BRIDGE ---
     ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
     search_asset = ticker_map.get(asset.upper(), asset).upper()
 
-    # --- INSTITUTIONAL SETTINGS ---
-    WAGER_SIZE = 100.0        # Fixed £100 wager per trade
+    # --- DYNAMIC RISK PARAMETERS ---
+    # We now derive WAGER_SIZE from the Ledger's 'Tradable_Balance'
+    try:
+        # Assumes your Ledger has a 'Tradable_Balance' column or a specific summary row
+        # If not found, it defaults to 100 to ensure the 'Company' never stalls
+        tradable_balance = ledger_df['Tradable_Balance'].iloc[-1] if 'Tradable_Balance' in ledger_df.columns else 1000.0
+        WAGER_SIZE = float(tradable_balance) * 0.20 
+    except Exception:
+        WAGER_SIZE = 100.0  # Safety fallback
+
     STOP_LOSS_PCT = 3.5      # Fixed -3.5% Emergency Stop Loss from Entry
     PROFIT_THRESHOLD = 2.0    # Initial 2% profit target before RSI/Trailing act
     TRAILING_PCT = 10.0      # 10% Trailing Profit from the Peak (High-Water Mark)
@@ -46,17 +54,11 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
                 perf_from_peak = ((current_price - new_peak) / new_peak) * 100
                 total_pnl_pct = ((current_price / entry_price) * 100) - 100
 
-                # --- NEW STAFF POLICY: EXIT LOGIC ---
-                
-                # A: Emergency Stop Loss (Always Active)
+                # --- EXIT LOGIC ---
                 hit_stop = perf_from_entry <= -STOP_LOSS_PCT
-                
-                # B: Profit Zone Check (Staff Requirement: 2% threshold)
                 is_in_profit_zone = perf_from_entry >= PROFIT_THRESHOLD
-                
-                # C: Momentum & Trailing (Only active if we have crossed the 2% profit mark)
                 hit_trail = is_in_profit_zone and (perf_from_peak <= -TRAILING_PCT)
-                hit_rsi_exit = is_in_profit_zone and (rsi > 70) # RSI signals exhaustion above 2%
+                hit_rsi_exit = is_in_profit_zone and (rsi > 70) 
 
                 if hit_stop or hit_trail or hit_rsi_exit:
                     reason = "EMERGENCY_STOP" if hit_stop else "TRAILING_PROFIT"
@@ -71,7 +73,6 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
                     return "CLOSE", trade_update
                 
                 # --- PEAK UPDATE ---
-                # If no exit, but the price hit a new high, move the goalposts
                 if new_peak > peak_price:
                     return "PEAK_UPDATE", {"index": trade_idx, "new_peak": new_peak}
                 
@@ -81,13 +82,11 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
             print(f"🏛️ JACE AUDIT ERROR: {e}")
 
     # --- 2. NEW TRADE ANALYSIS (ENTRY) ---
-    # Jace only acts if Kael’s intelligence confirms the Snap AND the Hook
     snap_pct = ((current_price - average) / average) * 100
     
-    # Kael's Entry Condition: Deep Snap + Price Turning Up (Hook)
     if snap_pct <= SNAP_THRESHOLD and hook:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # Ledger Columns: [timestamp, asset, type, price, wager, result (peak), profit, result_clean]
+        # WAGER_SIZE is now the dynamic 20% calculated at the start of the function
         trade_info = [ts, search_asset, "BUY", current_price, WAGER_SIZE, current_price, 0.0, "OPEN"]
         return "BUY", trade_info
 
