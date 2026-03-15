@@ -12,6 +12,16 @@ st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="�
 # --- 🛰️ ASSET CONFIGURATION ---
 ASSETS = ["XRP", "XLM", "HBAR"]
 
+# --- ⚡ CACHING ENGINE (Fixes the Intermittent "Vanishing" Bug) ---
+# This ensures that even if a fetch is slow, the dashboard stays populated.
+@st.cache_data(ttl=15)
+def fetch_vault_data(_conn):
+    return _conn.read(worksheet="Vault", ttl=0)
+
+@st.cache_data(ttl=15)
+def fetch_ledger_data(_conn):
+    return piper.get_firm_ledger(_conn)
+
 # --- 🏛️ THE FIRM HEADQUARTERS ---
 tab1, tab2 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office"])
 
@@ -27,28 +37,23 @@ with tab1:
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         
-        # 1. FETCH VAULT (Sheet 1)
-        vault_df = conn.read(worksheet="Vault", ttl=0)
-        
-        # 2. FETCH LEDGER (Sheet 2)
-        ledger_data = piper.get_firm_ledger(conn)
+        # 1. FETCH DATA (Using Protected Cache)
+        vault_df = fetch_vault_data(conn)
+        ledger_data = fetch_ledger_data(conn)
         live_ledger_df = ledger_data['trades_df']
+        
+        # 🟢 CRITICAL: Inject Tradable Balance for Jace's 20% Wager Rule
+        # We add this column so Jace can calculate the dynamic bet size
+        live_ledger_df['Tradable_Balance'] = ledger_data['tradable_balance']
 
-        # --- DATA HARDENING (Prevent the "Vanishing" bug) ---
+        # --- DATA HARDENING (From your original code) ---
         if not vault_df.empty:
             vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
-            # Use 'price_usd' or 'balance' depending on your sheet naming
             bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
-            
-            # Safe Numeric Conversion
             vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
-            
-            # Safe Timestamp Conversion (Flexible for different formats)
             vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
-            # Only localize if it's not already naive
             if vault_df['timestamp'].dt.tz is not None:
                 vault_df['timestamp'] = vault_df['timestamp'].dt.tz_localize(None)
-            
             vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
 
         if not live_ledger_df.empty:
@@ -60,7 +65,7 @@ with tab1:
         st.sidebar.write(f"Vault Records: {len(vault_df)}")
         st.sidebar.write(f"Ledger Records: {len(live_ledger_df)}")
 
-        # --- 🏛️ STAFF MANIFESTO (ADDED FOR TRANSPARENCY) ---
+        # --- 🏛️ STAFF MANIFESTO ---
         st.sidebar.divider()
         st.sidebar.subheader("📋 Active Staff Policy")
         with st.sidebar.expander("Live Execution Parameters", expanded=True):
@@ -76,10 +81,7 @@ with tab1:
             for coin in ASSETS:
                 price = vance.scout_live_price(coin)
                 if price:
-                    # Institutional Filter: Case-Insensitive Matching
                     asset_history = vault_df[vault_df['asset'].str.upper() == coin.upper()].copy()
-                    
-                    # Cutoff for Analysis (72h)
                     cutoff = datetime.now() - timedelta(hours=72)
                     asset_history = asset_history[asset_history['timestamp'] > cutoff]
                     
@@ -87,9 +89,9 @@ with tab1:
                         st.warning(f"📡 {coin}: No data in last 72h. Check Scout_job.")
                         continue
 
-                    # --- SIDEBAR INTEL (Emergency Stop / Trail / Dead Zone) ---
+                    # --- SIDEBAR INTEL (From your original code) ---
                     active_trade = live_ledger_df[(live_ledger_df['asset'].str.upper() == coin.upper()) & 
-                                                  (live_ledger_df['result_clean'].str.upper() == 'OPEN')]
+                                                 (live_ledger_df['result_clean'].str.upper() == 'OPEN')]
                     
                     if not active_trade.empty:
                         entry = float(active_trade.iloc[-1]['price'])
@@ -124,18 +126,18 @@ with tab1:
                                     y=alt.Y('Price:Q', title='Price ($)', scale=alt.Scale(zero=False)),
                                     tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                                 ).properties(height=200).interactive()
-                                st.altair_chart(line_chart, width="stretch")
+                                st.altair_chart(line_chart, use_container_width=True)
                             
-                            # --- 🏛️ JACE: EXECUTE ---
+                            # --- 🏛️ JACE: EXECUTE (With New 20% Wager Logic) ---
                             outcome, action_data = jace.execute_trade(coin, price, moving_avg, rsi_val, hook_found, live_ledger_df)
                             
                             if outcome == "BUY" and action_data:
                                 updated_df = pd.concat([live_ledger_df, pd.DataFrame([action_data])], ignore_index=True)
                                 conn.update(worksheet="Ledger", data=updated_df)
+                                st.cache_data.clear() # Reset cache so new trade shows immediately
                                 st.rerun()
                             
                             elif outcome in ["CLOSE", "PEAK_UPDATE"] and action_data:
-                                # Logic for updating existing ledger rows
                                 idx = action_data['index']
                                 if outcome == "CLOSE":
                                     live_ledger_df.at[idx, 'result_clean'] = "CLOSED"
@@ -143,6 +145,7 @@ with tab1:
                                 else:
                                     live_ledger_df.at[idx, 'result'] = action_data['new_peak']
                                 conn.update(worksheet="Ledger", data=live_ledger_df)
+                                st.cache_data.clear()
                                 st.rerun()
         else:
             st.error("Vault sheet is currently empty or unreadable.")
@@ -154,7 +157,8 @@ with tab1:
 with tab2:
     st.title("💼 Executive Summary")
     try:
-        ledger = piper.get_firm_ledger(conn)
+        # Using Cached Data for the Accountant as well
+        ledger = fetch_ledger_data(conn)
         if not ledger['trades_df'].empty:
             st.subheader("📊 Operational Health")
             m1, m2, m3, m4 = st.columns(4)
@@ -165,6 +169,6 @@ with tab2:
             
             st.divider()
             desk_df = piper.format_institutional_ledger(ledger['trades_df'], {})
-            st.dataframe(desk_df, width="stretch", height=450)
+            st.dataframe(desk_df, use_container_width=True, height=450)
     except Exception as e:
         st.error(f"Accountant Error: {e}")
