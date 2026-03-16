@@ -12,13 +12,13 @@ st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="�
 # --- 🛰️ ASSET CONFIGURATION ---
 ASSETS = ["XRP", "XLM", "HBAR"]
 
-# --- ⚡ CACHING ENGINE (Fixes the "Vanishing" Bug) ---
-# Holds data in memory for 15s to prevent intermittent UI flickering
-@st.cache_data(ttl=15)
+# --- ⚡ CACHING ENGINE (Updated for 2026 Stability) ---
+# Holds data in memory for 60s to prevent intermittent UI flickering and 503 timeouts
+@st.cache_data(ttl=60)
 def fetch_vault_data(_conn):
     return _conn.read(worksheet="Vault", ttl=0)
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=60)
 def fetch_ledger_data(_conn):
     return piper.get_firm_ledger(_conn)
 
@@ -67,7 +67,7 @@ with tab1:
         st.sidebar.write(f"Vault Records: {len(vault_df)}")
         st.sidebar.write(f"Ledger Records: {len(live_ledger_df)}")
 
-        # --- 🏛️ STAFF MANIFESTO (Transparency preserved) ---
+        # --- 🏛️ STAFF MANIFESTO (Fix: Switched st.table to st.dataframe with width='stretch') ---
         st.sidebar.divider()
         st.sidebar.subheader("📋 Active Staff Policy")
         with st.sidebar.expander("Live Execution Parameters", expanded=True):
@@ -76,7 +76,7 @@ with tab1:
                 "Parameter": ["Stop Loss", "Profit Target", "Trailing Stop", "Entry Snap", "MA Window", "RSI Period"],
                 "Value": ["-3.5%", "2.0%", "10.0%", "-2.0%", "24h (288)", "100"]
             }
-            st.table(pd.DataFrame(policy_data))
+            st.dataframe(pd.DataFrame(policy_data), width="stretch", hide_index=True)
 
         # --- ASSET LOOP ---
         if not vault_df.empty:
@@ -118,7 +118,7 @@ with tab1:
                             c3.metric("Snap %", f"{snap_pct:.3f}%", delta=f"{snap_pct:.3f}%", delta_color=st_color)
                             c4.metric("RSI (100)", f"{rsi_val:.1f}")
                             
-                            # --- 📈 24H CHART (Fixed Width Warning) ---
+                            # --- 📈 24H CHART (Fixed: width="stretch") ---
                             chart_cutoff = datetime.now() - timedelta(hours=24)
                             chart_data = asset_history[asset_history['timestamp'] > chart_cutoff].copy()
                             if not chart_data.empty:
@@ -128,7 +128,6 @@ with tab1:
                                     y=alt.Y('Price:Q', title='Price ($)', scale=alt.Scale(zero=False)),
                                     tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                                 ).properties(height=200).interactive()
-                                # DEPRECATION FIX: width="stretch"
                                 st.altair_chart(line_chart, width="stretch")
                             
                             # --- 🏛️ JACE: EXECUTE ---
