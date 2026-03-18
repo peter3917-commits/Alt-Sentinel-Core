@@ -18,15 +18,15 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.9'
+          python-version: '3.12' # ✅ Matched to your App's 3.12 environment
 
       - name: Install dependencies
         run: |
-          pip install pandas gspread google-auth requests
+          pip install pandas gspread google-auth requests streamlit pandas-ta
+          # ✅ Added streamlit and pandas-ta to prevent ModuleNotFound errors
 
       - name: Run Scout
         env:
-          # These must be added to GitHub Settings > Secrets > Actions
           GSHEETS_SECRET: ${{ secrets.GSHEETS_JSON }}
           GSHEET_ID: ${{ secrets.GSHEET_ID }}
         run: python scout_job.py
@@ -38,7 +38,6 @@ jobs:
           git config --local user.email "vance@alt-sentinel.ai"
           git config --local user.name "Vance (Background Scout)"
           
-          # Adding -f to ensure trades.csv is tracked if it exists
           git add -f trades.csv || true
           
           if git diff --cached --quiet; then
