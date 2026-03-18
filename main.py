@@ -104,7 +104,7 @@ with tab1:
                             y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
                             tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                         ).properties(height=300).interactive()
-                        st.altair_chart(line, width="stretch")
+                        st.altair_chart(line, use_container_width=True)
                         
                         if 'ma' in locals():
                             jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'])
@@ -140,21 +140,34 @@ with tab3:
             anchor = float(current_log['anchor_price'].iloc[0])
             in_log = True
 
-    # If not in log, get live price and prepare a new grid
+    # If not in log, get the LATEST price from the Vault (The Single Source of Truth)
     if not in_log:
-        b_price = vance.scout_live_price(target)
-        if b_price:
-            harvester = brian.BrianHarvester(anchor_price=b_price)
-            display_grid = harvester.active_grid
-            anchor = b_price
+        if not vault_df.empty:
+            # Filter Vault for the specific asset and get the most recent row
+            latest_entry = vault_df[vault_df['asset'] == target.upper()].sort_values('timestamp').tail(1)
             
-            # Action Button to Save
-            if st.button(f"🚀 Initialize {target} Harvest Grid"):
-                # Use the helper function from brian.py
-                brian.save_to_log_with_memory(conn, harvester.active_grid, target, anchor)
-                st.success(f"Grid for {target} anchored at ${anchor}!")
-                st.rerun()
+            if not latest_entry.empty:
+                vault_price = float(latest_entry[bal_col].iloc[0])
+                last_time = latest_entry['timestamp'].iloc[0]
+                
+                # Use Brian's logic to generate a grid based on this Vault Price
+                harvester = brian.BrianHarvester(anchor_price=vault_price)
+                display_grid = harvester.active_grid
+                anchor = vault_price
+                
+                st.info(f"📜 Vault True Price Found: **${anchor:,.6f}** (Logged: {last_time.strftime('%H:%M:%S')})")
+                
+                # Action Button to Save to Harvester Log
+                if st.button(f"🚀 Initialize {target} Grid from Vault"):
+                    brian.save_to_log_with_memory(conn, harvester.active_grid, target, anchor)
+                    st.success(f"Grid for {target} anchored to Vault Price!")
+                    st.rerun()
+            else:
+                st.warning(f"⚠️ No price record for {target} found in the Vault yet.")
+        else:
+            st.error("🚨 Vault is empty. Wait for a heartbeat ping to establish price.")
 
+    # --- DISPLAY METRICS ---
     c1, c2, c3 = st.columns(3)
     c1.metric("Reserved Budget", "£200.00")
     c2.metric("Grid Anchor", f"${anchor:,.6f}")
@@ -163,11 +176,10 @@ with tab3:
     st.divider()
     st.subheader("📋 Active Harvest Orders")
     if not display_grid.empty:
-        # Show only relevant trading columns
         view_cols = ['level', 'type', 'price', 'status', 'wager_gbp']
         st.dataframe(display_grid[[c for c in view_cols if c in display_grid.columns]], hide_index=True, use_container_width=True)
     else:
-        st.warning(f"No active grid for {target}. Scout Vance for a live anchor.")
+        st.warning(f"No active grid for {target}. Ensure Vault data exists.")
     
     # Harvester Graph
     if not vault_df.empty:
