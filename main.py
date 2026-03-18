@@ -22,23 +22,29 @@ def fetch_ledger_data(_conn):
     return piper.get_firm_ledger(_conn)
 
 # --- 🏛️ THE FIRM HEADQUARTERS ---
-# Initializing Connection and Data Globally so all Tabs can see the same hardened data
 conn = st.connection("gsheets", type=GSheetsConnection)
-vault_df = fetch_vault_data(conn)
+raw_vault = fetch_vault_data(conn)
 
-# --- 🛡️ GLOBAL DATA HARDENING (Original HBAR Fix moved to Global Scope) ---
-if not vault_df.empty:
+# --- 🛡️ GLOBAL DATA HARDENING ---
+# We clean the data ONCE here so it's ready for all Tabs/Staff
+if not raw_vault.empty:
+    vault_df = raw_vault.copy()
     vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
     bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
+    
     if 'asset' in vault_df.columns:
         vault_df['asset'] = vault_df['asset'].astype(str).str.upper().str.strip()
+    
     vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
     vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
+    
     if vault_df['timestamp'].dt.tz is not None:
         vault_df['timestamp'] = vault_df['timestamp'].dt.tz_localize(None)
+    
     vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
 else:
-    bal_col = 'price_usd' # Fallback for indexing
+    vault_df = pd.DataFrame()
+    bal_col = 'price_usd'
 
 tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office", "🚜 The Harvester"])
 
@@ -82,7 +88,7 @@ with tab1:
                     asset_history = asset_history[asset_history['timestamp'] > cutoff]
                     
                     if asset_history.empty:
-                        st.warning(f"📡 {coin}: No data in last 72h.")
+                        st.warning(f"📡 {coin}: No historical data in Vault.")
                         continue
 
                     # --- SIDEBAR INTEL ---
@@ -150,48 +156,41 @@ with tab2:
 with tab3:
     st.title("🚜 Brian.py: The Harvester")
     
-    target_coin = st.selectbox("Select Sector for Harvesting", ASSETS, index=2) # Default HBAR
+    target_coin = st.selectbox("Select Sector for Harvesting", ASSETS, index=2)
     brian_price = vance.scout_live_price(target_coin)
     
     if brian_price:
-        # 1. Initialize Brian with the Anchor
         harvester = brian.BrianHarvester(anchor_price=brian_price)
         grid_df = harvester.active_grid
         
-        # 2. Capital Display
         c1, c2, c3 = st.columns(3)
-        c1.metric("Reserved Budget", "£200.00", help="Protected from Trend Trades")
+        c1.metric("Reserved Budget", "£200.00")
         c2.metric("Grid Anchor", f"${brian_price:,.6f}")
         c3.metric("Wager/Level", "£20.00")
         
         st.divider()
-        
-        # 3. 📈 THE ESCALATOR CHART
         st.subheader("📡 Live Geometric Escalator")
-        # Standardized filtering using the globally hardened vault_df
-        brian_history = vault_df[vault_df['asset'] == target_coin.upper()].copy()
         
-        if not brian_history.empty:
-            b_chart_data = brian_history.tail(50).rename(columns={bal_col: 'price'})
-            
-            # Base Line
-            price_line = alt.Chart(b_chart_data).mark_line(color="#8884d8").encode(
-                x='timestamp:T',
-                y=alt.Y('price:Q', scale=alt.Scale(zero=False))
-            )
-            # Horizontal Grid Lines
-            grid_rules = alt.Chart(grid_df).mark_rule(strokeDash=[4, 4]).encode(
-                y='price:Q',
-                color=alt.Color('type:N', scale=alt.Scale(range=['#00ff00', '#ff4b4b']))
-            )
-            
-            st.altair_chart((price_line + grid_rules).properties(height=400), width="stretch")
-        else:
-            st.info(f"Historical data for {target_coin} is loading from the Vault...")
+        if not vault_df.empty:
+            brian_history = vault_df[vault_df['asset'] == target_coin.upper()].copy()
+            if not brian_history.empty:
+                b_chart_data = brian_history.tail(50).rename(columns={bal_col: 'price'})
+                
+                price_line = alt.Chart(b_chart_data).mark_line(color="#8884d8").encode(
+                    x='timestamp:T',
+                    y=alt.Y('price:Q', scale=alt.Scale(zero=False))
+                )
+                
+                grid_rules = alt.Chart(grid_df).mark_rule(strokeDash=[4, 4]).encode(
+                    y='price:Q',
+                    color=alt.Color('type:N', scale=alt.Scale(range=['#00ff00', '#ff4b4b']))
+                )
+                
+                st.altair_chart((price_line + grid_rules).properties(height=400), width="stretch")
+            else:
+                st.info("Awaiting historical data from Vault...")
         
-        # 4. Grid Status Table
         st.subheader("📋 Active Harvest Orders")
         st.dataframe(grid_df, width="stretch", hide_index=True)
-        
     else:
         st.warning("Awaiting live scout data to anchor Brian's grid.")
