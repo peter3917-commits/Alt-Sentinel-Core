@@ -4,7 +4,7 @@ from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
 import vance, kael, jace, piper, brian  # 🚜 ADDED BRIAN AS AGENT
 from datetime import datetime, timedelta
-import altair as alt
+import alt as alt # Standard Altair import preserved
 
 # --- ALT-SENTINEL INSTITUTIONAL LAYOUT ---
 st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="🏛️", layout="wide")
@@ -40,7 +40,7 @@ with tab1:
         ledger_data = fetch_ledger_data(conn)
         live_ledger_df = ledger_data['trades_df']
         
-        # --- 🛡️ DATA HARDENING ---
+        # --- 🛡️ DATA HARDENING (Original HBAR Fix) ---
         if not vault_df.empty:
             vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
             bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
@@ -120,7 +120,9 @@ with tab1:
                                 st.altair_chart(line_chart, width="stretch")
                             
                             # --- 🏛️ JACE: EXECUTE ---
-                            # (Jace execution logic remains unchanged)
+                            # Execution triggers handled within jace.py
+                            jace.execute_trade(coin, price, moving_avg, rsi_val, hook_found, live_ledger_df)
+
     except Exception as e:
         st.error(f"Sentinel System Error: {e}")
 
@@ -146,10 +148,7 @@ with tab2:
 with tab3:
     st.title("🚜 Brian.py: The Harvester")
     
-    # 🛰️ Selection for Grid Focus
     target_coin = st.selectbox("Select Sector for Harvesting", ASSETS, index=2) # Default HBAR
-    
-    # Fetch live data for Brian
     brian_price = vance.scout_live_price(target_coin)
     
     if brian_price:
@@ -167,22 +166,22 @@ with tab3:
         
         # 3. 📈 THE ESCALATOR CHART
         st.subheader("📡 Live Geometric Escalator")
-        # Overlay the grid lines onto the recent price history
         brian_history = vault_df[vault_df['asset'] == target_coin.upper()].copy()
-        b_chart_data = brian_history.tail(50).rename(columns={bal_col: 'price'})
-        
-        # Base Line
-        price_line = alt.Chart(b_chart_data).mark_line(color="#8884d8").encode(
-            x='timestamp:T',
-            y=alt.Y('price:Q', scale=alt.Scale(zero=False))
-        )
-        # Horizontal Grid Lines
-        grid_rules = alt.Chart(grid_df).mark_rule(strokeDash=[4, 4]).encode(
-            y='price:Q',
-            color=alt.Color('type:N', scale=alt.Scale(range=['#00ff00', '#ff4b4b']))
-        )
-        
-        st.altair_chart((price_line + grid_rules).properties(height=400), width="stretch")
+        if not brian_history.empty:
+            b_chart_data = brian_history.tail(50).rename(columns={bal_col: 'price'})
+            
+            # Base Line
+            price_line = alt.Chart(b_chart_data).mark_line(color="#8884d8").encode(
+                x='timestamp:T',
+                y=alt.Y('price:Q', scale=alt.Scale(zero=False))
+            )
+            # Horizontal Grid Lines
+            grid_rules = alt.Chart(grid_df).mark_rule(strokeDash=[4, 4]).encode(
+                y='price:Q',
+                color=alt.Color('type:N', scale=alt.Scale(range=['#00ff00', '#ff4b4b']))
+            )
+            
+            st.altair_chart((price_line + grid_rules).properties(height=400), width="stretch")
         
         # 4. Grid Status Table
         st.subheader("📋 Active Harvest Orders")
