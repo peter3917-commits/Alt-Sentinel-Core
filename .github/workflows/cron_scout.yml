@@ -18,12 +18,13 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.12' # ✅ Matched to your App's 3.12 environment
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
-          pip install pandas gspread google-auth requests streamlit pandas-ta
-          # ✅ Added streamlit and pandas-ta to prevent ModuleNotFound errors
+          python -m pip install --upgrade pip
+          pip install pandas gspread google-auth requests streamlit pandas-ta st-gsheets-connection altair
+          # ✅ Added st-gsheets-connection and altair to satisfy Brian/Vance imports
 
       - name: Run Scout
         env:
@@ -37,12 +38,10 @@ jobs:
         run: |
           git config --local user.email "vance@alt-sentinel.ai"
           git config --local user.name "Vance (Background Scout)"
-          
           git add -f trades.csv || true
-          
           if git diff --cached --quiet; then
-            echo "No new trades recorded by Jace. Skipping push."
+            echo "No new updates. Skipping push."
           else
-            git commit -m "Jace updated the Ledger [skip ci]"
+            git commit -m "Vance updated the Sentinel Ledger [skip ci]"
             git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git" HEAD:main
           fi
