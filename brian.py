@@ -6,12 +6,19 @@ from streamlit_gsheets import GSheetsConnection
 from datetime import datetime
 
 class BrianHarvester:
-    def __init__(self, anchor_price, total_budget=200, levels=10, spacing=0.015):
+    def __init__(self, anchor_price, tradable_balance, levels=10, spacing=0.015):
+        """
+        Brian.py: Updated for Dynamic Liquidity.
+        - Wager: Now 2% of Tradable Balance per level.
+        """
         self.anchor = anchor_price
-        self.budget = total_budget
+        self.balance = tradable_balance
         self.levels = levels
         self.spacing = spacing 
-        self.wager_per_level = total_budget / levels
+        
+        # 🎯 THE 2% RULE
+        self.wager_per_level = float(self.balance) * 0.02
+        
         self.tax_rate = 0.20 
         self.active_grid = self._generate_geometric_grid()
 
@@ -36,16 +43,27 @@ class BrianHarvester:
 def execute_autonomous_harvest(spreadsheet, sector, current_price):
     """
     Background worker for scout_job.py.
-    Now reports to both HARVESTER_LOG and the main LEDGER.
+    Calculates dynamic balance from Ledger and executes trades.
     """
     try:
-        # 1. Access the Tabs
         harvest_tab = spreadsheet.worksheet("HARVESTER_LOG")
-        try:
-            ledger_tab = spreadsheet.worksheet("Ledger") # Matches your Ledger tab name
-        except:
-            ledger_tab = spreadsheet.get_worksheet(1) # Fallback to second tab if name differs
+        ledger_tab = spreadsheet.worksheet("Ledger")
 
+        # 1. 💰 DYNAMIC BALANCE CALCULATION
+        # Brian reads the Ledger to find out how much 'Tradable_Balance' is left.
+        ledger_data = ledger_tab.get_all_records()
+        ledger_df = pd.DataFrame(ledger_data)
+        
+        # Look for the last known Tradable_Balance in your Ledger columns
+        # If your Ledger doesn't have a balance column, we assume a base (e.g., £1000)
+        # or calculate it: Seed - (All Active Wagers)
+        if 'Tradable_Balance' in ledger_df.columns:
+            current_balance = float(ledger_df['Tradable_Balance'].iloc[-1])
+        else:
+            # Fallback if Piper hasn't calculated a balance column yet
+            current_balance = 1000.0 
+
+        # 2. Check Grid Triggers
         data = harvest_tab.get_all_records()
         if not data: return False
 
@@ -58,7 +76,9 @@ def execute_autonomous_harvest(spreadsheet, sector, current_price):
         for idx in active_indices:
             level_price = float(df.at[idx, 'price'])
             order_type = str(df.at[idx, 'type']).upper()
-            wager = float(df.at[idx, 'wager_gbp'])
+            
+            # 🎯 APPLY THE 2% WAGER BASED ON LIVE BALANCE
+            dynamic_wager = current_balance * 0.02
             
             triggered = False
             if order_type == "BUY" and current_price <= level_price:
@@ -69,17 +89,13 @@ def execute_autonomous_harvest(spreadsheet, sector, current_price):
             if triggered:
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
-                # A. Update Harvester Log (The local grid state)
+                # Update Harvester Log
                 row_num = idx + 2 
-                status_col = df.columns.get_loc('status') + 1
-                harvest_tab.update_cell(row_num, status_col, "FILLED")
+                harvest_tab.update_cell(row_num, df.columns.get_loc('status') + 1, "FILLED")
                 
-                # B. Write to Main Ledger (The permanent firm record)
-                # Format: Timestamp, Asset, Type, Price, Wager, Result (HighWater), Profit, Result Clean
-                # Note: For SELLs, Brian assumes a successful harvest from the anchor.
+                # Write to Main Ledger
                 profit_pct = 0.0
                 if order_type == "SELL":
-                    # Simple grid profit calculation: (Price / Anchor) - 1
                     anchor = float(df.at[idx, 'anchor_price'])
                     profit_pct = ((level_price / anchor) - 1) * 100
 
@@ -88,18 +104,15 @@ def execute_autonomous_harvest(spreadsheet, sector, current_price):
                     sector.upper(), 
                     f"GRID_{order_type}", 
                     level_price, 
-                    wager, 
-                    level_price, # Result/Peak
+                    dynamic_wager, 
+                    level_price, 
                     profit_pct, 
                     "CLOSED" if order_type == "SELL" else "OPEN"
                 ]
                 ledger_tab.append_row(new_ledger_entry, value_input_option='USER_ENTERED')
-                
-                print(f"🏛️ LEDGER UPDATED: Brian recorded {sector} {order_type} at ${level_price}")
+                print(f"🏛️ LEDGER UPDATED: {sector} {order_type} for £{dynamic_wager:.2f}")
 
         return True
     except Exception as e:
         print(f"❌ Brian's Ledger Reporting Error: {e}")
         return False
-
-# ... (keep save_to_log_with_memory as it was)
