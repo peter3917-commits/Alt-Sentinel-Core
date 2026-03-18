@@ -1,13 +1,27 @@
 # --- 🛰️ INITIALIZATION (FIXES THE CRASH) ---
-new_records = []  # This line prevents the NameError
+new_records = []  # Prevents NameError
+ASSETS = ["XRP", "XLM", "HBAR"]
 
-# [Your collection logic for Vance usually goes here]
+# 🚀 THE MISSING COLLECTION (This fills the list for Section D)
+for coin in ASSETS:
+    try:
+        price = vance.scout_live_price(coin)
+        if price:
+            new_records.append({
+                "Staff": "Vance",
+                "Timestamp": datetime.utcnow(),
+                "Asset": coin,
+                "Price_Usd": price
+            })
+            print(f"🛰️ Scouted {coin}: ${price}")
+    except Exception as e:
+        print(f"❌ Failed to scout {coin}: {e}")
 
 # --- 🛰️ THE PRECISION ENGINE ---
 
 # D. DATA PREPARATION & SAFE APPEND
 if new_records:
-    # Prepare only the new rows for insertion (as strings for GSheets)
+    # Prepare rows matching your Vault exactly: Staff, Timestamp, Asset, Price_Usd
     rows_to_append = [
         [r["Staff"], r["Timestamp"].strftime('%Y-%m-%d %H:%M:%S'), r["Asset"], r["Price_Usd"]]
         for r in new_records
