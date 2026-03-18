@@ -3,6 +3,7 @@ import pandas_ta as ta
 import numpy as np
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+from datetime import datetime
 
 class BrianHarvester:
     def __init__(self, anchor_price, total_budget=200, levels=10, spacing=0.015):
@@ -94,7 +95,7 @@ def save_to_log_with_memory(conn, new_grid, sector, anchor):
         log_df = new_grid.copy()
         log_df['sector'] = sector.upper()
         log_df['anchor_price'] = anchor
-        log_df['timestamp'] = pd.to_datetime('now').strftime('%Y-%m-%d %H:%M:%S')
+        log_df['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         # Ensure columns match the expected ledger structure
         cols = ['timestamp', 'sector', 'anchor_price', 'level', 'type', 'price', 'status', 'wager_gbp']
@@ -102,10 +103,8 @@ def save_to_log_with_memory(conn, new_grid, sector, anchor):
 
         # 3. Merge without overwriting other sectors
         if existing_data is not None and not existing_data.empty:
-            # Clean headers for reliable matching
             existing_data.columns = [str(c).lower().strip() for c in existing_data.columns]
             
-            # Filter out the current sector to prevent duplicates
             if 'sector' in existing_data.columns:
                 other_sectors = existing_data[existing_data['sector'].astype(str).str.upper() != sector.upper()]
                 final_df = pd.concat([other_sectors, log_df], ignore_index=True)
@@ -114,9 +113,56 @@ def save_to_log_with_memory(conn, new_grid, sector, anchor):
         else:
             final_df = log_df
 
-        # 4. Push back to GSheets
         conn.update(worksheet="HARVESTER_LOG", data=final_df)
         return True
     except Exception as e:
         st.error(f"Brian's Memory Sync Error: {e}")
+        return False
+
+def execute_autonomous_harvest(spreadsheet, sector, current_price):
+    """
+    Background worker for scout_job.py. 
+    Finds the grid for the sector, checks price triggers, and updates the sheet directly.
+    """
+    try:
+        harvest_tab = spreadsheet.worksheet("HARVESTER_LOG")
+        data = harvest_tab.get_all_records()
+        if not data:
+            return False
+
+        df = pd.DataFrame(data)
+        # Ensure column names are clean
+        df.columns = [str(c).lower().strip() for c in df.columns]
+        
+        # Target only the current sector and PENDING orders
+        mask = (df['sector'].str.upper() == sector.upper()) & (df['status'].str.upper() == 'PENDING')
+        active_indices = df[mask].index.tolist()
+
+        updates = 0
+        for idx in active_indices:
+            level_price = float(df.at[idx, 'price'])
+            order_type = str(df.at[idx, 'type']).upper()
+            
+            # TRIGGER LOGIC:
+            # If BUY and price falls BELOW level OR If SELL and price rises ABOVE level
+            triggered = False
+            if order_type == "BUY" and current_price <= level_price:
+                triggered = True
+            elif order_type == "SELL" and current_price >= level_price:
+                triggered = True
+                
+            if triggered:
+                # Update the row in the spreadsheet (GSpread is 1-indexed, +2 for header offset)
+                row_num = idx + 2 
+                status_col = df.columns.get_loc('status') + 1
+                ts_col = df.columns.get_loc('timestamp') + 1
+                
+                harvest_tab.update_cell(row_num, status_col, "FILLED")
+                harvest_tab.update_cell(row_num, ts_col, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                print(f"🚜 HARVESTER ALERT: {sector} {order_type} at {level_price} triggered by price {current_price}!")
+                updates += 1
+
+        return updates > 0
+    except Exception as e:
+        print(f"❌ Brian's Autonomous Engine Error: {e}")
         return False
