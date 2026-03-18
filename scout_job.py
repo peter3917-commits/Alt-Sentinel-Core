@@ -13,16 +13,19 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 if os.path.exists("creds.json"):
     creds = Credentials.from_service_account_file("creds.json", scopes=scope)
 else:
-    # 🎯 TARGET FIXED: Now looking for your specific GitHub Secret name
-    google_creds = os.getenv("GSHEETS_JSON")
+    # 🎯 MATCHED TO YOUR WORKFLOW: Looking for 'GSHEETS_SECRET'
+    google_creds = os.getenv("GSHEETS_SECRET")
     if google_creds:
-        creds_dict = json.loads(google_creds)
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        try:
+            creds_dict = json.loads(google_creds)
+            creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        except json.JSONDecodeError:
+            raise Exception("❌ CRITICAL: GSHEETS_SECRET found but it is not valid JSON. Check your GitHub Secret content.")
     else:
-        raise Exception("❌ CRITICAL: No Google Credentials found (creds.json or GSHEETS_JSON Secret).")
+        raise Exception("❌ CRITICAL: No Google Credentials found (creds.json or GSHEETS_SECRET).")
 
 client = gspread.authorize(creds)
-SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
+SHEET_ID = os.getenv("GSHEET_ID", "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ")
 sheet = client.open_by_key(SHEET_ID).sheet1 
 
 # --- 🛰️ INITIALIZATION ---
@@ -59,7 +62,7 @@ if new_records:
         
         # --- 🛡️ SAFETY BRAKE TIDY ---
         all_values = sheet.get_all_values()
-        if len(all_values) > 1: # Basic check to ensure we have headers
+        if len(all_values) > 1: 
             headers = [h.lower().strip() for h in all_values[0]]
             rows = all_values[1:]
             
