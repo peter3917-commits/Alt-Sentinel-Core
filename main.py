@@ -4,7 +4,7 @@ from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
 import vance, kael, jace, piper, brian  # 🚜 ADDED BRIAN AS AGENT
 from datetime import datetime, timedelta
-import alt as alt # Standard Altair import preserved
+import altair as alt # Standard Altair import preserved
 
 # --- ALT-SENTINEL INSTITUTIONAL LAYOUT ---
 st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="🏛️", layout="wide")
