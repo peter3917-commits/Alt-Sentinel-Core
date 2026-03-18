@@ -127,7 +127,6 @@ with tab3:
     st.title("🚜 The Harvester")
     target = st.selectbox("Harvest Sector", ASSETS, index=2)
     
-    # Check for memory in Sheet
     display_grid = pd.DataFrame()
     anchor = 0.0
     in_log = False
@@ -140,24 +139,20 @@ with tab3:
             anchor = float(current_log['anchor_price'].iloc[0])
             in_log = True
 
-    # If not in log, get the LATEST price from the Vault (The Single Source of Truth)
     if not in_log:
         if not vault_df.empty:
-            # Filter Vault for the specific asset and get the most recent row
             latest_entry = vault_df[vault_df['asset'] == target.upper()].sort_values('timestamp').tail(1)
             
             if not latest_entry.empty:
                 vault_price = float(latest_entry[bal_col].iloc[0])
                 last_time = latest_entry['timestamp'].iloc[0]
                 
-                # Use Brian's logic to generate a grid based on this Vault Price
                 harvester = brian.BrianHarvester(anchor_price=vault_price)
                 display_grid = harvester.active_grid
                 anchor = vault_price
                 
                 st.info(f"📜 Vault True Price Found: **${anchor:,.6f}** (Logged: {last_time.strftime('%H:%M:%S')})")
                 
-                # Action Button to Save to Harvester Log
                 if st.button(f"🚀 Initialize {target} Grid from Vault"):
                     brian.save_to_log_with_memory(conn, harvester.active_grid, target, anchor)
                     st.success(f"Grid for {target} anchored to Vault Price!")
@@ -181,14 +176,36 @@ with tab3:
     else:
         st.warning(f"No active grid for {target}. Ensure Vault data exists.")
     
-    # Harvester Graph
+    # --- 🛰️ UPDATED HARVESTER GRAPH WITH GRID OVERLAY ---
     if not vault_df.empty:
-        b_hist = vault_df[vault_df['asset'] == target.upper()].tail(60)
+        b_hist = vault_df[vault_df['asset'] == target.upper()].tail(60).copy()
         if not b_hist.empty:
             st.subheader("📡 Live Geometric Escalator")
-            chart_data = b_hist.rename(columns={bal_col: 'price'})
-            b_chart = alt.Chart(chart_data).mark_line(color="#8884d8").encode(
-                x='timestamp:T', 
-                y=alt.Y('price:Q', scale=alt.Scale(zero=False))
+            b_hist = b_hist.rename(columns={bal_col: 'price'})
+            
+            # 1. Price Line
+            price_line = alt.Chart(b_hist).mark_line(color="#1f77b4").encode(
+                x=alt.X('timestamp:T', title='Time'),
+                y=alt.Y('price:Q', title='Price (USD)', scale=alt.Scale(zero=False))
             )
-            st.altair_chart(b_chart.properties(height=400), use_container_width=True)
+
+            # 2. Grid Rungs Overlay (Using display_grid for levels)
+            if not display_grid.empty:
+                # Add color logic for the lines
+                grid_viz = display_grid.copy()
+                grid_viz['color'] = grid_viz['type'].apply(lambda x: '#228b22' if x == 'BUY' else '#d2322d')
+                
+                grid_rules = alt.Chart(grid_viz).mark_rule(
+                    strokeDash=[5, 5], strokeWidth=1
+                ).encode(
+                    y='price:Q',
+                    color=alt.Color('color:N', scale=None),
+                    tooltip=['level', 'type', 'price']
+                )
+                
+                # Combine
+                final_chart = (price_line + grid_rules).properties(height=400).interactive()
+            else:
+                final_chart = price_line.properties(height=400).interactive()
+
+            st.altair_chart(final_chart, use_container_width=True)
