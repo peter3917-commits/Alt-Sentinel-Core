@@ -12,10 +12,9 @@ st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="�
 # --- 🛰️ ASSET CONFIGURATION ---
 ASSETS = ["XRP", "XLM", "HBAR"]
 
-# --- ⚡ THE DEEP-SYNC ENGINE (Fixes the "9 records" limit) ---
+# --- ⚡ THE DEEP-SYNC ENGINE ---
 @st.cache_data(ttl=60)
 def fetch_vault_data_direct():
-    # Direct export bypasses the GSheets connector limits/caching issues
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
     URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     try:
@@ -32,25 +31,42 @@ def fetch_ledger_data(_conn):
 # --- 🏛️ GLOBAL DATA INITIALIZATION ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 raw_vault = fetch_vault_data_direct()
-ledger_data = fetch_ledger_data(conn) # Brian and Piper need this
+ledger_data = fetch_ledger_data(conn)
 
-# --- 🛡️ DATA HARDENING ---
+# --- 🛡️ DATA HARDENING (FIXES KEYERROR 'ASSET') ---
 vault_df = pd.DataFrame()
 bal_col = 'price_usd'
 
 if not raw_vault.empty:
     vault_df = raw_vault.copy()
+    
+    # Force lowercase and remove hidden spaces from headers to prevent KeyError
     vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
     
-    # Identify price column from your sheet
-    for c in ['price_usd', 'balance', 'price']:
+    # CRITICAL FIX: Ensure 'asset' column exists even if sheet header is slightly off
+    if 'asset' not in vault_df.columns and len(vault_df.columns) >= 3:
+        # If your sheet is Staff, Timestamp, Asset, Price... Asset is index 2
+        # If your sheet is Timestamp, Asset, Price... Asset is index 1
+        # We search for it:
+        potential_asset_cols = [c for c in vault_df.columns if 'asset' in c or 'coin' in c]
+        if potential_asset_cols:
+            vault_df = vault_df.rename(columns={potential_asset_cols[0]: 'asset'})
+
+    # Identify price column
+    for c in ['price_usd', 'balance', 'price', 'balance2']:
         if c in vault_df.columns:
             bal_col = c
             break
 
-    # Format and Sort chronologically
+    # Format Data Types
     vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
     vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
+    
+    # Ensure 'asset' is string and uppercase for filtering
+    if 'asset' in vault_df.columns:
+        vault_df['asset'] = vault_df['asset'].astype(str).str.upper().str.strip()
+
+    # Drop broken rows and sort
     vault_df = vault_df.dropna(subset=['timestamp', bal_col])
     vault_df = vault_df.sort_values('timestamp', ascending=True)
 
@@ -64,13 +80,14 @@ with tab1:
     
     auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
     if auto_trade:
+        # This triggers the 5-minute ping
         st_autorefresh(interval=300000, key="vance_heartbeat")
 
-    if not vault_df.empty:
+    if not vault_df.empty and 'asset' in vault_df.columns:
         for coin in ASSETS:
             price = vance.scout_live_price(coin)
             if price:
-                coin_history = vault_df[vault_df['asset'].str.upper() == coin.upper()].copy()
+                coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
                 
                 with st.container():
                     st.divider()
@@ -86,11 +103,9 @@ with tab1:
                             c3.metric("Snap %", f"{snap:.3f}%")
                             c4.metric("RSI", f"{rsi:.1f}")
                         
-                        # --- 📈 THE GRAPH FIX (Last 300 chronological points) ---
                         chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
-                        
                         line = alt.Chart(chart_data).mark_line(
-                            color="#00ff00" if snap > 0 else "#ff4b4b"
+                            color="#00ff00" if (not coin_history.empty and 'snap' in locals() and snap > 0) else "#ff4b4b"
                         ).encode(
                             x=alt.X('timestamp:T', title='Historical Timeline'),
                             y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
@@ -99,8 +114,8 @@ with tab1:
                         
                         st.altair_chart(line, width="stretch")
                         
-                        # Jace Execution
-                        jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'])
+                        if 'ma' in locals():
+                            jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'])
 
 # --- 🧾 TAB 2: ACCOUNTING (PIPER) ---
 with tab2:
@@ -122,7 +137,6 @@ with tab3:
     b_price = vance.scout_live_price(target)
     
     if b_price:
-        # Brian's Core Logic Preserved
         harvester = brian.BrianHarvester(anchor_price=b_price)
         
         c1, c2, c3 = st.columns(3)
@@ -134,10 +148,15 @@ with tab3:
         st.subheader("📋 Active Harvest Orders")
         st.dataframe(harvester.active_grid, width="stretch", hide_index=True)
         
-        # Brian's Escalator Chart (Using the newly fixed vault_df)
-        b_hist = vault_df[vault_df['asset'] == target.upper()].tail(60)
-        if not b_hist.empty:
-            b_chart = alt.Chart(b_hist.rename(columns={bal_col: 'price'})).mark_line(color="#8884d8").encode(
-                x='timestamp:T', y=alt.Y('price:Q', scale=alt.Scale(zero=False))
-            )
-            st.altair_chart(b_chart.properties(height=400), width="stretch")
+        # FIXED CHART LOGIC:
+        if not vault_df.empty and 'asset' in vault_df.columns:
+            b_hist = vault_df[vault_df['asset'] == target.upper()].tail(60)
+            if not b_hist.empty:
+                st.subheader("📡 Live Geometric Escalator")
+                b_chart = alt.Chart(b_hist.rename(columns={bal_col: 'price'})).mark_line(color="#8884d8").encode(
+                    x='timestamp:T', 
+                    y=alt.Y('price:Q', scale=alt.Scale(zero=False))
+                )
+                st.altair_chart(b_chart.properties(height=400), width="stretch")
+            else:
+                st.info(f"Waiting for more vault data for {target}...")
