@@ -1,8 +1,8 @@
-streamlit
-pandas
+streamlit>=1.50.0
+pandas>=2.3.3
+pandas-ta>=0.3.14b
 requests
 st-gsheets-connection
 streamlit-autorefresh
 gspread
 google-auth
-pandas-ta
