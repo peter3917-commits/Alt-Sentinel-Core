@@ -22,7 +22,24 @@ def fetch_ledger_data(_conn):
     return piper.get_firm_ledger(_conn)
 
 # --- 🏛️ THE FIRM HEADQUARTERS ---
-# UPDATED: Added Tab 3 for Brian
+# Initializing Connection and Data Globally so all Tabs can see the same hardened data
+conn = st.connection("gsheets", type=GSheetsConnection)
+vault_df = fetch_vault_data(conn)
+
+# --- 🛡️ GLOBAL DATA HARDENING (Original HBAR Fix moved to Global Scope) ---
+if not vault_df.empty:
+    vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
+    bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
+    if 'asset' in vault_df.columns:
+        vault_df['asset'] = vault_df['asset'].astype(str).str.upper().str.strip()
+    vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
+    vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
+    if vault_df['timestamp'].dt.tz is not None:
+        vault_df['timestamp'] = vault_df['timestamp'].dt.tz_localize(None)
+    vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
+else:
+    bal_col = 'price_usd' # Fallback for indexing
+
 tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office", "🚜 The Harvester"])
 
 # --- 🛰️ TAB 1: SENTINEL ENGINE (Jace & Kael) ---
@@ -35,23 +52,9 @@ with tab1:
         st.sidebar.success("Vance is scouting the Alt-Sectors...")
 
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        vault_df = fetch_vault_data(conn)
         ledger_data = fetch_ledger_data(conn)
         live_ledger_df = ledger_data['trades_df']
         
-        # --- 🛡️ DATA HARDENING (Original HBAR Fix) ---
-        if not vault_df.empty:
-            vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
-            bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
-            if 'asset' in vault_df.columns:
-                vault_df['asset'] = vault_df['asset'].astype(str).str.upper().str.strip()
-            vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
-            vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
-            if vault_df['timestamp'].dt.tz is not None:
-                vault_df['timestamp'] = vault_df['timestamp'].dt.tz_localize(None)
-            vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
-
         # --- SYSTEM HEARTBEAT ---
         st.sidebar.divider()
         st.sidebar.subheader("📡 System Heartbeat")
@@ -120,7 +123,6 @@ with tab1:
                                 st.altair_chart(line_chart, width="stretch")
                             
                             # --- 🏛️ JACE: EXECUTE ---
-                            # Execution triggers handled within jace.py
                             jace.execute_trade(coin, price, moving_avg, rsi_val, hook_found, live_ledger_df)
 
     except Exception as e:
@@ -166,7 +168,9 @@ with tab3:
         
         # 3. 📈 THE ESCALATOR CHART
         st.subheader("📡 Live Geometric Escalator")
+        # Standardized filtering using the globally hardened vault_df
         brian_history = vault_df[vault_df['asset'] == target_coin.upper()].copy()
+        
         if not brian_history.empty:
             b_chart_data = brian_history.tail(50).rename(columns={bal_col: 'price'})
             
@@ -182,6 +186,8 @@ with tab3:
             )
             
             st.altair_chart((price_line + grid_rules).properties(height=400), width="stretch")
+        else:
+            st.info(f"Historical data for {target_coin} is loading from the Vault...")
         
         # 4. Grid Status Table
         st.subheader("📋 Active Harvest Orders")
