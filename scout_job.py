@@ -1,90 +1,54 @@
-import pandas as pd
-from datetime import datetime, timedelta
-import gspread
-from google.oauth2.service_account import Credentials
-import os, json, requests
-import vance, kael, jace, piper, brian 
+# --- 🛰️ THE PRECISION ENGINE ---
 
-# 1. 🏛️ SETUP AUTH - ALT-SENTINEL CORE
-try:
-    creds_dict = json.loads(os.environ['GSHEETS_SECRET'])
-    creds = Credentials.from_service_account_info(creds_dict, scopes=[
-        "https://www.googleapis.com/auth/spreadsheets", 
-        "https://www.googleapis.com/auth/drive"
-    ])
-    client = gspread.authorize(creds)
-    
-    sheet_id = os.environ.get('GSHEET_ID')
-    if not sheet_id:
-        raise ValueError("GSHEET_ID environment variable is missing!")
-        
-    sheet = client.open_by_key(sheet_id).worksheet("Vault")
-except Exception as e:
-    print(f"❌ Auth Error: {e}")
-    exit(1)
-
-# --- 🛰️ THE MAIN ENGINE ---
-
-# A. VANCE: FETCH & SYNC DATA
-raw_data = sheet.get_all_records()
-df = pd.DataFrame(raw_data)
-
-# Standardize Columns for the Firm
-if not df.empty:
-    df.columns = [str(c).strip().title() for c in df.columns]
-    df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-    last_ts = df['Timestamp'].max()
-else:
-    last_ts = datetime.utcnow() - timedelta(hours=50)
-    df = pd.DataFrame(columns=["Staff", "Timestamp", "Asset", "Price_Usd"])
-
-now = datetime.utcnow()
-ASSETS = ["XRP", "XLM", "HBAR"]
-
-print(f"🛰️ Vance: Commencing scout mission for {ASSETS}...")
-
-# B. SPOT PRICE INJECTION
-new_records = []
-for coin in ASSETS:
-    price = vance.scout_live_price(coin)
-    if price:
-        new_records.append({
-            "Staff": "Vance (Background)", 
-            "Timestamp": now, 
-            "Asset": coin.upper(), 
-            "Price_Usd": float(price)
-        })
-        print(f"✅ {coin} spotted at ${price:,.6f}")
-
+# D. DATA PREPARATION & SAFE APPEND
 if new_records:
-    live_df = pd.DataFrame(new_records)
-    df = pd.concat([df, live_df], ignore_index=True)
-
-# C. KAEL & JACE: SECTOR ANALYSIS (PRE-COMPUTE)
-# This ensures Jace is ready the moment you open the Streamlit App
-for coin in ASSETS:
-    asset_df = df[df['Asset'] == coin.upper()].copy()
-    if len(asset_df) > 10:
-        current_price = float(asset_df['Price_Usd'].iloc[-1])
-        # Note: Kael/Jace logic can be triggered here if you want auto-execution 
-        # but for now, we are just hardening the data Vault.
-        print(f"📊 Sector {coin} Hardened. Depth: {len(asset_df)} points.")
-
-# D. SHRED & SYNC (Keep last 72 hours only to prevent Sheet Bloat)
-cutoff = datetime.utcnow() - timedelta(hours=72)
-df = df[df['Timestamp'] > cutoff]
-
-# Final Cleanup and Formatting
-if not df.empty:
-    df = df.drop_duplicates(subset=['Timestamp', 'Asset']).sort_values('Timestamp')
-    df_sync = df[['Staff', 'Timestamp', 'Asset', 'Price_Usd']].copy()
-    df_sync['Timestamp'] = df_sync['Timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    # Prepare only the new rows for insertion (as strings for GSheets)
+    rows_to_append = [
+        [r["Staff"], r["Timestamp"].strftime('%Y-%m-%d %H:%M:%S'), r["Asset"], r["Price_Usd"]]
+        for r in new_records
+    ]
     
-    # Prepare for GSheets Update
-    data_to_save = [df_sync.columns.values.tolist()] + df_sync.values.tolist()
     try:
-        sheet.clear()
-        sheet.update(range_name='A1', values=data_to_save)
-        print(f"✅ Vault synchronized. Current Depth: {len(df_sync)} rows.")
+        # PURE APPEND: This adds to the bottom and NEVER wipes the sheet.
+        sheet.append_rows(rows_to_append, value_input_option='USER_ENTERED')
+        print(f"✅ Vault updated: +{len(rows_to_append)} new records added to bottom.")
     except Exception as e:
-        print(f"⚠️ Vault sync delay: {e}")
+        print(f"⚠️ Vault append failed: {e}")
+
+# E. PRECISION TIDY (48-HOUR CUTOFF)
+# Instead of clearing the sheet, we only shave off the oldest rows from the top.
+try:
+    # 1. Fetch current sheet state
+    all_values = sheet.get_all_values()
+    if len(all_values) > 1:
+        headers = all_values[0]
+        rows = all_values[1:] # Skip header
+        
+        # Identify Timestamp column (usually index 1)
+        ts_idx = headers.index("Timestamp") if "Timestamp" in headers else 1
+        cutoff = datetime.utcnow() - timedelta(hours=48)
+        
+        # 2. Count how many rows at the TOP are older than 48 hours
+        rows_to_delete = 0
+        for row in rows:
+            try:
+                row_ts = pd.to_datetime(row[ts_idx])
+                if row_ts < cutoff:
+                    rows_to_delete += 1
+                else:
+                    break # Stop once we reach data within the 48h window
+            except:
+                # If a row is corrupted or unreadable, mark it for removal
+                rows_to_delete += 1 
+        
+        # 3. Targeted Deletion (Only if old data exists)
+        if rows_to_delete > 0:
+            # delete_rows(start_index, end_index) 
+            # We start at 2 to preserve the header at row 1
+            sheet.delete_rows(2, rows_to_delete + 1)
+            print(f"🧹 Tidy complete: Removed {rows_to_delete} legacy records (>48h).")
+        else:
+            print("✨ Vault is already lean. No legacy data to remove.")
+            
+except Exception as e:
+    print(f"⚠️ Tidy-up delayed (Vault remains safe): {e}")
