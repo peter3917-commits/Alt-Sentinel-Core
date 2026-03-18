@@ -27,6 +27,7 @@ class BrianHarvester:
         using a geometric progression (Fixed Percentage).
         """
         grid = []
+        # Calculate BUY levels (Lowering from anchor)
         for i in range(1, (self.levels // 2) + 1):
             buy_price = self.anchor * (1 - self.spacing) ** i
             grid.append({
@@ -37,6 +38,7 @@ class BrianHarvester:
                 "wager_gbp": self.wager_per_level
             })
         
+        # Calculate SELL levels (Rising from anchor)
         for i in range(1, (self.levels // 2) + 1):
             sell_price = self.anchor * (1 + self.spacing) ** i
             grid.append({
@@ -74,7 +76,7 @@ class BrianHarvester:
             "net": round(net_to_company, 2)
         }
 
-# --- 🚀 GLOBAL UTILITY FUNCTIONS (For main.py access) ---
+# --- 🚀 GLOBAL UTILITY FUNCTIONS ---
 
 def save_to_log_with_memory(conn, new_grid, sector, anchor):
     """
@@ -85,7 +87,7 @@ def save_to_log_with_memory(conn, new_grid, sector, anchor):
         # 1. Fetch current data from the sheet (ignore cache to get latest)
         try:
             existing_data = conn.read(worksheet="HARVESTER_LOG", ttl=0)
-        except:
+        except Exception:
             existing_data = pd.DataFrame()
 
         # 2. Format the new grid entries
@@ -94,16 +96,21 @@ def save_to_log_with_memory(conn, new_grid, sector, anchor):
         log_df['anchor_price'] = anchor
         log_df['timestamp'] = pd.to_datetime('now').strftime('%Y-%m-%d %H:%M:%S')
         
+        # Ensure columns match the expected ledger structure
         cols = ['timestamp', 'sector', 'anchor_price', 'level', 'type', 'price', 'status', 'wager_gbp']
         log_df = log_df[[c for c in cols if c in log_df.columns]]
 
         # 3. Merge without overwriting other sectors
-        if not existing_data.empty:
-            # Clean headers
+        if existing_data is not None and not existing_data.empty:
+            # Clean headers for reliable matching
             existing_data.columns = [str(c).lower().strip() for c in existing_data.columns]
-            # Keep everything that ISN'T the current sector
-            other_sectors = existing_data[existing_data['sector'] != sector.upper()]
-            final_df = pd.concat([other_sectors, log_df], ignore_index=True)
+            
+            # Filter out the current sector to prevent duplicates
+            if 'sector' in existing_data.columns:
+                other_sectors = existing_data[existing_data['sector'].astype(str).str.upper() != sector.upper()]
+                final_df = pd.concat([other_sectors, log_df], ignore_index=True)
+            else:
+                final_df = log_df
         else:
             final_df = log_df
 
@@ -111,5 +118,5 @@ def save_to_log_with_memory(conn, new_grid, sector, anchor):
         conn.update(worksheet="HARVESTER_LOG", data=final_df)
         return True
     except Exception as e:
-        st.error(f"Memory Sync Error: {e}")
+        st.error(f"Brian's Memory Sync Error: {e}")
         return False
