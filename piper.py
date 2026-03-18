@@ -11,7 +11,7 @@ PROFIT_TAX_PCT = 0.20
 def get_firm_ledger(conn, prices_dict=None):
     """
     Piper: The High-Precision Accountant.
-    Unified Balance Model: No hidden reserves or hardcoded subtractions.
+    Updated: Now pulls 'Burn' data from the GSheets 'Overheads' tab.
     """
     default_data = {
         "vault_cash": INITIAL_CAPITAL, 
@@ -22,7 +22,7 @@ def get_firm_ledger(conn, prices_dict=None):
     }
     
     try:
-        # STEP 1: Fresh Ledger Fetch (Forced TTL=0 to bypass the £200 ghost cache)
+        # STEP 1: Fresh Ledger Fetch
         df = conn.read(worksheet="Ledger", ttl=0)
         
         if df.empty:
@@ -39,37 +39,36 @@ def get_firm_ledger(conn, prices_dict=None):
         
         # --- THE PEAK TRACKING FIX ---
         df['status_check'] = df['result_clean'].astype(str).str.lower().str.strip()
-        
-        # Labels that signify a trade is no longer taking up "Tradable Balance"
         win_labels = ['win', 'win_moonshot', 'win_trailing', 'trail_exit', 'closed', 'grid_harvest']
         
-        # 1. Calculate Realized P/L (Sums all 'profit_usd' from finished trades)
+        # 1. Calculate Realized P/L
         realized = float(df[df['status_check'].isin(win_labels + ['loss', 'legacy_cleanup'])]['profit_usd'].sum())
         
-        # 2. Calculate Overheads (Burn)
+        # 2. Calculate Overheads (Burn) from GSheets "Overheads" tab 🚀
         burn = 0.0
-        if os.path.exists('overheads.csv'):
-            try:
-                overhead_df = pd.read_csv('overheads.csv')
+        try:
+            # Piper now looks at your new tab instead of a local CSV
+            overhead_df = conn.read(worksheet="Overheads", ttl=0)
+            if not overhead_df.empty:
+                overhead_df.columns = [c.lower().strip() for c in overhead_df.columns]
+                # Sum the 'amount' column (Exchange fees + manual expenses)
                 burn = float(pd.to_numeric(overhead_df['amount'], errors='coerce').abs().sum())
-            except: 
-                burn = 0.0
+        except Exception as e:
+            # If the Overheads tab is empty or doesn't exist yet, burn is 0
+            burn = 0.0
 
-        # 3. Tax Reserve (20% of the sum of profits from winning labels)
+        # 3. Tax Reserve (20% of winning profits)
         winning_profit = float(df[df['status_check'].isin(win_labels)]['profit_usd'].sum())
         tax_pot = winning_profit * PROFIT_TAX_PCT
-        if tax_pot < 0: 
-            tax_pot = 0.0 
+        if tax_pot < 0: tax_pot = 0.0 
         
-        # 4. Vault Cash (Seed + Profit - Expenses)
+        # 4. Vault Cash (Initial + Realized Profit - Burn)
         vault_cash = float(INITIAL_CAPITAL + realized - burn)
         
-        # 5. Locked Wagers (ONLY subtracts wagers where status is 'open')
-        # This is where the £200 usually hides if a row isn't marked 'closed'
+        # 5. Locked Wagers (Active trades)
         locked_wagers = float(df[df['status_check'] == 'open']['wager'].sum())
 
         # --- 🎯 THE UNIFIED CALCULATION ---
-        # We NO LONGER subtract BRIAN_ALLOCATION.
         tradable_balance = float(vault_cash - tax_pot - locked_wagers)
 
         return {
