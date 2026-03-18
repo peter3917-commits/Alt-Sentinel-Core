@@ -1,3 +1,8 @@
+# --- 🛰️ INITIALIZATION (FIXES THE CRASH) ---
+new_records = []  # This line prevents the NameError
+
+# [Your collection logic for Vance usually goes here]
+
 # --- 🛰️ THE PRECISION ENGINE ---
 
 # D. DATA PREPARATION & SAFE APPEND
@@ -16,7 +21,7 @@ if new_records:
         print(f"⚠️ Vault append failed: {e}")
 
 # E. PRECISION TIDY (48-HOUR CUTOFF)
-# Instead of clearing the sheet, we only shave off the oldest rows from the top.
+# Only shaves oldest rows from the top if they are over 48 hours old.
 try:
     # 1. Fetch current sheet state
     all_values = sheet.get_all_values()
@@ -24,7 +29,7 @@ try:
         headers = all_values[0]
         rows = all_values[1:] # Skip header
         
-        # Identify Timestamp column (usually index 1)
+        # Identify Timestamp column
         ts_idx = headers.index("Timestamp") if "Timestamp" in headers else 1
         cutoff = datetime.utcnow() - timedelta(hours=48)
         
@@ -38,13 +43,12 @@ try:
                 else:
                     break # Stop once we reach data within the 48h window
             except:
-                # If a row is corrupted or unreadable, mark it for removal
+                # If a row is corrupted, mark for removal to keep sheet clean
                 rows_to_delete += 1 
         
         # 3. Targeted Deletion (Only if old data exists)
         if rows_to_delete > 0:
-            # delete_rows(start_index, end_index) 
-            # We start at 2 to preserve the header at row 1
+            # We start at row 2 to preserve the header at row 1
             sheet.delete_rows(2, rows_to_delete + 1)
             print(f"🧹 Tidy complete: Removed {rows_to_delete} legacy records (>48h).")
         else:
