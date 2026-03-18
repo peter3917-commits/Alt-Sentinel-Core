@@ -6,12 +6,11 @@ from datetime import datetime
 # --- ALT-SENTINEL FINANCIAL SETTINGS ---
 INITIAL_CAPITAL = 1000.00
 PROFIT_TAX_PCT = 0.20
-# 🛡️ BRIAN_ALLOCATION REMOVED: Calculation below now reflects unified balance.
 
 def get_firm_ledger(conn, prices_dict=None):
     """
     Piper: The High-Precision Accountant.
-    Updated: Now pulls 'Burn' data from the GSheets 'Overheads' tab.
+    Optimized: Enhanced 'Burn' sanitation to catch currency symbols and formatting.
     """
     default_data = {
         "vault_cash": INITIAL_CAPITAL, 
@@ -44,17 +43,19 @@ def get_firm_ledger(conn, prices_dict=None):
         # 1. Calculate Realized P/L
         realized = float(df[df['status_check'].isin(win_labels + ['loss', 'legacy_cleanup'])]['profit_usd'].sum())
         
-        # 2. Calculate Overheads (Burn) from GSheets "Overheads" tab 🚀
+        # 2. Calculate Overheads (Burn) from GSheets 🚀
         burn = 0.0
         try:
-            # Piper now looks at your new tab instead of a local CSV
             overhead_df = conn.read(worksheet="Overheads", ttl=0)
             if not overhead_df.empty:
-                overhead_df.columns = [c.lower().strip() for c in overhead_df.columns]
-                # Sum the 'amount' column (Exchange fees + manual expenses)
-                burn = float(pd.to_numeric(overhead_df['amount'], errors='coerce').abs().sum())
+                # Force columns to lowercase and strip spaces
+                overhead_df.columns = [str(c).lower().strip() for c in overhead_df.columns]
+                
+                if 'amount' in overhead_df.columns:
+                    # 🛡️ SANITIZER: Removes symbols like £ or $ that stop math from working
+                    clean_amounts = overhead_df['amount'].astype(str).str.replace(r'[£$,]', '', regex=True)
+                    burn = float(pd.to_numeric(clean_amounts, errors='coerce').abs().sum())
         except Exception as e:
-            # If the Overheads tab is empty or doesn't exist yet, burn is 0
             burn = 0.0
 
         # 3. Tax Reserve (20% of winning profits)
