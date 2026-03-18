@@ -1,39 +1,44 @@
+import sys
 import vance
 import gspread
 from google.oauth2.service_account import Credentials
 import pandas as pd
 
-# 1. TEST VANCE
-print("Step 1: Testing Vance's Scouting...")
-price = vance.scout_live_price("XRP")
-if price:
-    print(f"✅ Vance found XRP at ${price}")
-else:
-    print("❌ Vance failed to find a price. Check internet or API limits.")
+def log(msg):
+    print(f">>> {msg}")
+    sys.stdout.flush() # Forces the terminal to show the text instantly
 
-# 2. TEST AUTHENTICATION
-print("\nStep 2: Testing Vault Authentication...")
+log("STATION CHECK STARTING...")
+
+# 1. TEST VANCE (The most likely 'hang' point)
+log("Attempting to reach Vance...")
 try:
-    # Use the same credentials your scout_job.py uses
+    price = vance.scout_live_price("XRP")
+    log(f"Vance Response: {price}")
+except Exception as e:
+    log(f"Vance crashed: {e}")
+
+# 2. TEST AUTH
+log("Opening credentials file...")
+try:
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = Credentials.from_service_account_file("creds.json", scopes=scope)
     client = gspread.authorize(creds)
-    print("✅ Credentials accepted by Google.")
+    log("Auth Success.")
 except Exception as e:
-    print(f"❌ Authentication Failed: {e}")
+    log(f"Auth Failure: {e}")
 
-# 3. TEST WRITE PERMISSIONS
-print("\nStep 3: Testing Vault Write...")
+# 3. TEST SHEET
+log("Connecting to Sheet ID...")
 try:
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
     sheet = client.open_by_key(SHEET_ID).sheet1
+    log(f"Connected to sheet: {sheet.title}")
     
-    test_row = ["SYSTEM_CHECK", pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'), "CHECK", 0.0]
-    sheet.append_row(test_row)
-    print("✅ Successfully wrote a test row to the Vault!")
-except gspread.exceptions.SpreadsheetNotFound:
-    print("❌ Error: Spreadsheet ID not found. Check the ID in your code.")
-except gspread.exceptions.APIError as e:
-    print(f"❌ Error: Google API rejected the write. Are you over the 48-hour limit? {e}")
+    log("Sending test row...")
+    sheet.append_row(["DEBUG", pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'), "CHECK", 0.0])
+    log("✅ WRITE SUCCESSFUL! Check the Google Sheet now.")
 except Exception as e:
-    print(f"❌ Unexpected Error: {e}")
+    log(f"Sheet error: {e}")
+
+log("STATION CHECK COMPLETE.")
