@@ -2,10 +2,9 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
-import vance, kael, jace, piper, brian
+import vance, kael, jace, piper, brian  # Your custom logic files
 from datetime import datetime, timedelta
-import alt-sentinel as alt
-import altair as alt
+import altair as alt  # This is the real library for your charts
 
 # --- ALT-SENTINEL INSTITUTIONAL LAYOUT ---
 st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="🏛️", layout="wide")
