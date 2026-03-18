@@ -1,122 +1,214 @@
+import streamlit as st
 import pandas as pd
+from streamlit_gsheets import GSheetsConnection
+from streamlit_autorefresh import st_autorefresh
+import vance, kael, jace, piper, brian  # 🚜 ADDED BRIAN AS AGENT
 from datetime import datetime, timedelta
-import gspread
-from google.oauth2.service_account import Credentials
-import os, json, requests
-import vance, kael, jace  # AGENT IDENTITIES
+import altair as alt
 
-# 1. SETUP AUTH
-try:
-    creds_dict = json.loads(os.environ['GSHEETS_SECRET'])
-    creds = Credentials.from_service_account_info(creds_dict, scopes=[
-        "https://www.googleapis.com/auth/spreadsheets", 
-        "https://www.googleapis.com/auth/drive"
-    ])
-    client = gspread.authorize(creds)
+# --- ALT-SENTINEL INSTITUTIONAL LAYOUT ---
+st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="🏛️", layout="wide")
+
+# --- 🛰️ ASSET CONFIGURATION ---
+ASSETS = ["XRP", "XLM", "HBAR"]
+
+# --- ⚡ CACHING ENGINE ---
+@st.cache_data(ttl=60)
+def fetch_vault_data(_conn):
+    return _conn.read(worksheet="Vault", ttl=0)
+
+@st.cache_data(ttl=60)
+def fetch_ledger_data(_conn):
+    return piper.get_firm_ledger(_conn)
+
+# --- 🏛️ THE FIRM HEADQUARTERS ---
+# UPDATED: Added Tab 3 for Brian
+tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office", "🚜 The Harvester"])
+
+# --- 🛰️ TAB 1: SENTINEL ENGINE ---
+with tab1:
+    st.title("🏛️ Alt-Sentinel: High-Precision Desk")
     
-    sheet_id = os.environ.get('GSHEET_ID')
-    if not sheet_id:
-        raise ValueError("GSHEET_ID environment variable is missing!")
-        
-    vault_sheet = client.open_by_key(sheet_id).worksheet("Vault")
-    ledger_sheet = client.open_by_key(sheet_id).worksheet("Ledger")
-except Exception as e:
-    print(f"❌ Auth Error: {e}")
-    exit(1)
+    auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
+    if auto_trade:
+        st_autorefresh(interval=300000, key="vance_heartbeat")
+        st.sidebar.success("Vance is scouting the Alt-Sectors...")
 
-# --- A. VANCE: FETCH DATA & SYNC VAULT ---
-raw_vault = vault_sheet.get_all_records()
-df = pd.DataFrame(raw_vault)
-
-if not df.empty:
-    # Ensure capitalization matches logic
-    df.columns = [c.capitalize() if c.lower() == 'asset' else c for c in df.columns]
-    df['Timestamp'] = pd.to_datetime(df['Timestamp'])
-    last_ts = df['Timestamp'].max()
-else:
-    last_ts = datetime.utcnow() - timedelta(hours=50)
-    df = pd.DataFrame(columns=["Staff", "Timestamp", "Asset", "Balance"])
-
-now = datetime.utcnow()
-
-# --- GAP HEALER (No changes to logic) ---
-gap_seconds = (now - last_ts).total_seconds()
-if gap_seconds > 420 and not df.empty:
-    missing_slots = int(gap_seconds // 300)
-    for i in range(1, missing_slots + 1):
-        heal_ts = last_ts + timedelta(minutes=5 * i)
-        for asset_name in ["XRP", "XLM", "HBAR"]:
-            last_price = df[df['Asset'] == asset_name]['Balance'].iloc[-1] if not df[df['Asset'] == asset_name].empty else 0
-            df = pd.concat([df, pd.DataFrame([{"Staff": "Vance (Heal)", "Timestamp": heal_ts, "Asset": asset_name, "Balance": float(last_price)}])], ignore_index=True)
-
-# ADD CURRENT PRICES
-ASSETS = {"XRP": "ripple", "XLM": "stellar", "HBAR": "hedera-hashgraph"}
-for asset_name in ASSETS.keys():
     try:
-        price = vance.scout_live_price(asset_name)
-        if price:
-            df = pd.concat([df, pd.DataFrame([{"Staff": "Vance (Background)", "Timestamp": now, "Asset": asset_name, "Balance": float(price)}])], ignore_index=True)
-    except Exception as e:
-        print(f"⚠️ Vance failed {asset_name}: {e}")
-
-df = df.drop_duplicates(subset=['Timestamp', 'Asset']).sort_values('Timestamp')
-
-# --- B. KAEL & JACE: SECTOR ANALYSIS & LEDGER MANAGEMENT ---
-raw_ledger = ledger_sheet.get_all_records()
-ledger_df = pd.DataFrame(raw_ledger)
-
-# Clean ledger column names for Jace
-if not ledger_df.empty:
-    ledger_df.columns = [c.lower().strip() for c in ledger_df.columns]
-
-for asset_name in ASSETS.keys():
-    asset_df = df[df['Asset'] == asset_name].copy()
-    if not asset_df.empty:
-        # 🏛️ KAEL: ANALYZE DATA
-        analysis = kael.check_for_snap(asset_name, float(asset_df['Balance'].iloc[-1]), asset_df.rename(columns={"Balance": "price_usd"}))
+        conn = st.connection("gsheets", type=GSheetsConnection)
         
-        if analysis and analysis[0] is not None:
-            moving_avg, snap_pct, rsi_val, hook_found = analysis
-            current_price = float(asset_df['Balance'].iloc[-1])
+        vault_df = fetch_vault_data(conn)
+        ledger_data = fetch_ledger_data(conn)
+        live_ledger_df = ledger_data['trades_df']
+        # Note: tradable_balance logic is handled inside piper.py to respect Brian's £200
+
+        # --- 🛡️ THE HBAR FIX: DATA HARDENING ---
+        if not vault_df.empty:
+            # 1. Clean column names
+            vault_df.columns = [str(c).lower().strip() for c in vault_df.columns]
+            bal_col = 'price_usd' if 'price_usd' in vault_df.columns else 'balance'
             
-            # 🏛️ JACE: EXECUTE TRADE
-            outcome, action_data = jace.execute_trade(
-                asset_name, current_price, moving_avg, rsi_val, hook_found, ledger_df
-            )
+            # 2. Force Asset names to uppercase and strip whitespace
+            if 'asset' in vault_df.columns:
+                vault_df['asset'] = vault_df['asset'].get_all() if hasattr(vault_df['asset'], 'get_all') else vault_df['asset']
+                vault_df['asset'] = vault_df['asset'].astype(str).str.upper().str.strip()
             
-            # --- C. LEDGER UPDATER (Handling Jace's Returns) ---
-            # Columns: 1:ts, 2:asset, 3:type, 4:price, 5:wager, 6:result(peak), 7:profit_usd, 8:result_clean
-            if outcome == "BUY":
-                # action_data is a list of 8 items. append_row handles this perfectly.
-                ledger_sheet.append_row(action_data)
-                print(f"🚀 {asset_name}: Position Opened at ${current_price:.6f}")
-                
-            elif outcome == "CLOSE":
-                idx = action_data['index'] + 2 # Adjust for header row and 0-indexing
-                # Update Result (Column 6), Profit (Column 7), and Status (Column 8)
-                ledger_sheet.update_cell(idx, 6, action_data.get('price', current_price))
-                ledger_sheet.update_cell(idx, 7, action_data['profit_usd'])
-                ledger_sheet.update_cell(idx, 8, "CLOSED")
-                print(f"💰 {asset_name}: Closed via {action_data['reason']}. PnL: {action_data['profit_usd']:.2f}%")
+            # 3. Force Numeric
+            vault_df[bal_col] = pd.to_numeric(vault_df[bal_col], errors='coerce')
+            vault_df['timestamp'] = pd.to_datetime(vault_df['timestamp'], errors='coerce')
+            
+            if vault_df['timestamp'].dt.tz is not None:
+                vault_df['timestamp'] = vault_df['timestamp'].dt.tz_localize(None)
+            
+            vault_df = vault_df.dropna(subset=['timestamp', bal_col]).copy()
 
-            elif outcome == "PEAK_UPDATE":
-                idx = action_data['index'] + 2
-                # Update the Peak Price in Column 6 (result)
-                ledger_sheet.update_cell(idx, 6, action_data['new_peak'])
-                print(f"📈 {asset_name}: New Peak Recorded: ${action_data['new_peak']:.6f}")
+        if not live_ledger_df.empty:
+            live_ledger_df.columns = [str(c).lower().strip() for c in live_ledger_df.columns]
 
-            print(f"Sect: {asset_name} | Price: ${current_price:.6f} | RSI: {rsi_val:.1f} | Jace: {outcome}")
+        # --- SYSTEM HEARTBEAT ---
+        st.sidebar.divider()
+        st.sidebar.subheader("📡 System Heartbeat")
+        st.sidebar.write(f"Vault Records: {len(vault_df)}")
+        st.sidebar.write(f"Ledger Records: {len(live_ledger_df)}")
 
-# --- D. THE JANITOR & VAULT SYNC ---
-cutoff = datetime.utcnow() - timedelta(hours=50)
-df = df[df['Timestamp'] > cutoff].sort_values(by=['Timestamp', 'Asset'])
+        # --- 📋 STAFF MANIFESTO ---
+        st.sidebar.divider()
+        st.sidebar.subheader("📋 Active Staff Policy")
+        with st.sidebar.expander("Live Execution Parameters", expanded=True):
+            policy_data = {
+                "Agent": ["Jace", "Jace", "Jace", "Jace", "Kael", "Kael"],
+                "Parameter": ["Stop Loss", "Profit Target", "Trailing Stop", "Entry Snap", "MA Window", "RSI Period"],
+                "Value": ["-3.5%", "2.0%", "10.0%", "-2.0%", "24h (288)", "100"]
+            }
+            st.dataframe(pd.DataFrame(policy_data), width="stretch", hide_index=True)
 
-if not df.empty:
-    df_sync = df[['Staff', 'Timestamp', 'Asset', 'Balance']].copy()
-    df_sync['Timestamp'] = df_sync['Timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    try:
-        vault_sheet.clear()
-        vault_sheet.update(range_name='A1', values=[df_sync.columns.values.tolist()] + df_sync.values.tolist())
-        print(f"✅ Vault synced. Rows: {len(df_sync)}")
+        # --- ASSET LOOP ---
+        if not vault_df.empty:
+            for coin in ASSETS:
+                price = vance.scout_live_price(coin)
+                if price:
+                    asset_history = vault_df[vault_df['asset'] == coin.upper()].copy()
+                    cutoff = datetime.now() - timedelta(hours=72)
+                    asset_history = asset_history[asset_history['timestamp'] > cutoff]
+                    
+                    if asset_history.empty:
+                        st.warning(f"📡 {coin}: No data in last 72h. Check Scout_job.")
+                        continue
+
+                    # --- SIDEBAR INTEL ---
+                    active_trade = live_ledger_df[(live_ledger_df['asset'].str.upper() == coin.upper()) & 
+                                                 (live_ledger_df['result_clean'].str.upper() == 'OPEN')]
+                    
+                    if not active_trade.empty:
+                        entry = float(active_trade.iloc[-1]['price'])
+                        peak = float(active_trade.iloc[-1]['result'])
+                        with st.sidebar.expander(f"🟢 {coin} Intel", expanded=True):
+                            st.caption(f"🛡️ Stop: `${(entry * 0.965):,.6f}`")
+                            st.caption(f"📈 Trail: `${(peak * 0.90):,.6f}`")
+                            if price < (entry * 1.02):
+                                st.info("🔒 Status: Dead Zone")
+
+                    with st.container():
+                        st.divider()
+                        st.header(f"🛰️ Sector: {coin}")
+                        c1, c2, c3, c4 = st.columns(4)
+                        c1.metric(f"Live {coin}", f"${price:,.6f}")
+                        
+                        analysis = kael.check_for_snap(coin, price, asset_history.rename(columns={bal_col: "price_usd"}))
+                        if analysis and analysis[0] is not None:
+                            moving_avg, snap_pct, rsi_val, hook_found = analysis
+                            c2.metric("Avg Window", f"${moving_avg:,.6f}")
+                            st_color = "normal" if snap_pct > 0 else "inverse"
+                            c3.metric("Snap %", f"{snap_pct:.3f}%", delta=f"{snap_pct:.3f}%", delta_color=st_color)
+                            c4.metric("RSI (100)", f"{rsi_val:.1f}")
+                            
+                            # --- 📈 24H CHART ---
+                            chart_cutoff = datetime.now() - timedelta(hours=24)
+                            chart_data = asset_history[asset_history['timestamp'] > chart_cutoff].copy()
+                            if not chart_data.empty:
+                                chart_df = chart_data[['timestamp', bal_col]].rename(columns={bal_col: 'Price'})
+                                line_chart = alt.Chart(chart_df).mark_line(color="#00ff00" if snap_pct > 0 else "#ff4b4b").encode(
+                                    x=alt.X('timestamp:T', title='Timeline'),
+                                    y=alt.Y('Price:Q', title='Price ($)', scale=alt.Scale(zero=False)),
+                                    tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
+                                ).properties(height=200).interactive()
+                                st.altair_chart(line_chart, width="stretch")
+                            
+                            # --- 🏛️ JACE: EXECUTE ---
+                            outcome, action_data = jace.execute_trade(coin, price, moving_avg, rsi_val, hook_found, live_ledger_df)
+                            
+                            if outcome == "BUY" and action_data:
+                                updated_df = pd.concat([live_ledger_df, pd.DataFrame([action_data])], ignore_index=True)
+                                conn.update(worksheet="Ledger", data=updated_df)
+                                st.cache_data.clear()
+                                st.rerun()
+                            
+                            elif outcome in ["CLOSE", "PEAK_UPDATE"] and action_data:
+                                idx = action_data['index']
+                                if outcome == "CLOSE":
+                                    live_ledger_df.at[idx, 'result_clean'] = "CLOSED"
+                                    live_ledger_df.at[idx, 'profit_usd'] = action_data['profit_usd']
+                                else:
+                                    live_ledger_df.at[idx, 'result'] = action_data['new_peak']
+                                conn.update(worksheet="Ledger", data=live_ledger_df)
+                                st.cache_data.clear()
+                                st.rerun()
+        else:
+            st.error("Vault sheet is currently empty or unreadable.")
+
     except Exception as e:
-        print(f"⚠️ Sync delay: {e}")
+        st.error(f"Sentinel System Error: {e}")
+
+# --- 🧾 TAB 2: ACCOUNTING ---
+with tab2:
+    st.title("💼 Executive Summary")
+    try:
+        ledger = fetch_ledger_data(conn)
+        if not ledger['trades_df'].empty:
+            st.subheader("📊 Operational Health")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Vault Cash", f"£{ledger['vault_cash']:,.2f}")
+            m2.metric("Tradable Balance", f"£{ledger['tradable_balance']:,.2f}")
+            m3.metric("Tax Pot", f"£{ledger['tax_pot']:,.2f}")
+            m4.metric("Burn (Overheads)", f"£{ledger['burn']:,.2f}")
+            
+            st.divider()
+            desk_df = piper.format_institutional_ledger(ledger['trades_df'], {})
+            st.dataframe(desk_df, width="stretch", height=450)
+    except Exception as e:
+        st.error(f"Accountant Error: {e}")
+
+# --- 🚜 TAB 3: THE HARVESTER (BRIAN INTEGRATION) ---
+with tab3:
+    st.title("🚜 Brian.py: The Harvester")
+    target_coin = st.selectbox("Select Sector for Harvesting", ASSETS, index=2)
+    brian_price = vance.scout_live_price(target_coin)
+    
+    if brian_price:
+        # Initializing Brian logic
+        harvester = brian.BrianHarvester(anchor_price=brian_price)
+        grid_df = harvester.active_grid
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Reserved Budget", "£200.00", help="Protected from Trend Trades")
+        c2.metric("Grid Anchor", f"${brian_price:,.6f}")
+        c3.metric("Wager/Level", "£20.00")
+        
+        st.divider()
+        st.subheader("📡 Live Geometric Escalator")
+        brian_history = vault_df[vault_df['asset'] == target_coin.upper()].copy()
+        b_chart_data = brian_history.tail(50).rename(columns={bal_col: 'price'})
+        
+        price_line = alt.Chart(b_chart_data).mark_line(color="#8884d8").encode(
+            x='timestamp:T',
+            y=alt.Y('price:Q', scale=alt.Scale(zero=False))
+        )
+        grid_rules = alt.Chart(grid_df).mark_rule(strokeDash=[4, 4]).encode(
+            y='price:Q',
+            color=alt.Color('type:N', scale=alt.Scale(range=['#00ff00', '#ff4b4b']))
+        )
+        st.altair_chart((price_line + grid_rules).properties(height=400), width="stretch")
+        st.subheader("📋 Active Harvest Orders")
+        st.dataframe(grid_df, width="stretch", hide_index=True)
+    else:
+        st.warning("Awaiting live scout data...")
