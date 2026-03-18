@@ -5,3 +5,4 @@ st-gsheets-connection
 streamlit-autorefresh
 gspread
 google-auth
+pandas-ta
