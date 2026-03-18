@@ -1,5 +1,6 @@
 import pandas as pd
 import os
+import streamlit as st
 from datetime import datetime
 
 # --- ALT-SENTINEL FINANCIAL SETTINGS ---
@@ -22,7 +23,7 @@ def get_firm_ledger(conn, prices_dict=None):
     
     try:
         # STEP 1: Fresh Ledger Fetch
-        df = conn.read(worksheet="Ledger", ttl="0")
+        df = conn.read(worksheet="Ledger", ttl=0)
         
         if df.empty:
             return default_data
@@ -30,8 +31,9 @@ def get_firm_ledger(conn, prices_dict=None):
         # Clean column names
         df.columns = [c.lower().strip() for c in df.columns]
         
-        # Ensure numeric columns are floats (preserving 6dp for precision sectors)
-        for col in ['profit_usd', 'wager', 'price', 'result']:
+        # Ensure numeric columns are floats
+        numeric_cols = ['profit_usd', 'wager', 'price', 'result']
+        for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
         
@@ -48,11 +50,13 @@ def get_firm_ledger(conn, prices_dict=None):
             try:
                 overhead_df = pd.read_csv('overheads.csv')
                 burn = float(pd.to_numeric(overhead_df['amount'], errors='coerce').abs().sum())
-            except: burn = 0.0
+            except: 
+                burn = 0.0
 
         # Tax Reserve calculation (Piper takes 20% of every win, including Brian's)
         tax_pot = float(df[df['status_check'].isin(win_labels)]['profit_usd'].sum() * PROFIT_TAX_PCT)
-        if tax_pot < 0: tax_pot = 0.0 
+        if tax_pot < 0: 
+            tax_pot = 0.0 
         
         vault_cash = float(INITIAL_CAPITAL + realized - burn)
         
@@ -67,7 +71,23 @@ def get_firm_ledger(conn, prices_dict=None):
             "trades_df": df
         }
     except Exception as e:
-        print(f"🏛️ PIPER CRITICAL LEDGER ERROR: {e}")
+        st.error(f"🏛️ PIPER CRITICAL LEDGER ERROR: {e}")
         return default_data
 
-# ... [rest of the get_live_price, calculate_unrealized, and format_institutional_ledger functions remain exactly as you provided]
+def format_institutional_ledger(df, params=None):
+    """
+    The missing function that fixes your Streamlit 'AttributeError'.
+    Formats the Ledger for the Executive Summary.
+    """
+    if df.empty:
+        return df
+
+    # Professional Column cleanup
+    display_df = df.copy()
+    display_df.columns = [str(c).replace('_', ' ').title() for c in display_df.columns]
+    
+    # Sort by most recent first
+    if 'Timestamp' in display_df.columns:
+        display_df = display_df.sort_values('Timestamp', ascending=False)
+
+    return display_df
