@@ -6,12 +6,12 @@ from datetime import datetime
 # --- ALT-SENTINEL FINANCIAL SETTINGS ---
 INITIAL_CAPITAL = 1000.00
 PROFIT_TAX_PCT = 0.20
-# 🛡️ THE SURVIVAL SHIELD IS REMOVED: Brian now uses 2% Dynamic Risk from the main pool.
+# 🛡️ BRIAN_ALLOCATION REMOVED: Calculation below now reflects unified balance.
 
 def get_firm_ledger(conn, prices_dict=None):
     """
     Piper: The High-Precision Accountant.
-    Updated: Unified Balance Model. Brian's £200 is released back to Tradable Balance.
+    Unified Balance Model: No hidden reserves or hardcoded subtractions.
     """
     default_data = {
         "vault_cash": INITIAL_CAPITAL, 
@@ -22,7 +22,7 @@ def get_firm_ledger(conn, prices_dict=None):
     }
     
     try:
-        # STEP 1: Fresh Ledger Fetch
+        # STEP 1: Fresh Ledger Fetch (Forced TTL=0 to bypass the £200 ghost cache)
         df = conn.read(worksheet="Ledger", ttl=0)
         
         if df.empty:
@@ -40,13 +40,13 @@ def get_firm_ledger(conn, prices_dict=None):
         # --- THE PEAK TRACKING FIX ---
         df['status_check'] = df['result_clean'].astype(str).str.lower().str.strip()
         
-        # Updated Labels: Jace uses 'closed', Brian uses 'closed' or 'grid_harvest'
+        # Labels that signify a trade is no longer taking up "Tradable Balance"
         win_labels = ['win', 'win_moonshot', 'win_trailing', 'trail_exit', 'closed', 'grid_harvest']
         
-        # Calculate Realized P/L
+        # 1. Calculate Realized P/L (Sums all 'profit_usd' from finished trades)
         realized = float(df[df['status_check'].isin(win_labels + ['loss', 'legacy_cleanup'])]['profit_usd'].sum())
         
-        # Calculate Overheads (Burn)
+        # 2. Calculate Overheads (Burn)
         burn = 0.0
         if os.path.exists('overheads.csv'):
             try:
@@ -55,20 +55,26 @@ def get_firm_ledger(conn, prices_dict=None):
             except: 
                 burn = 0.0
 
-        # Tax Reserve (Piper takes 20% of all closed winning trades)
-        tax_pot = float(df[df['status_check'].isin(win_labels)]['profit_usd'].sum() * PROFIT_TAX_PCT)
+        # 3. Tax Reserve (20% of the sum of profits from winning labels)
+        winning_profit = float(df[df['status_check'].isin(win_labels)]['profit_usd'].sum())
+        tax_pot = winning_profit * PROFIT_TAX_PCT
         if tax_pot < 0: 
             tax_pot = 0.0 
         
+        # 4. Vault Cash (Seed + Profit - Expenses)
         vault_cash = float(INITIAL_CAPITAL + realized - burn)
         
-        # Deduct wagers for currently OPEN trades (Jace's buys and Brian's Grid Buys)
+        # 5. Locked Wagers (ONLY subtracts wagers where status is 'open')
+        # This is where the £200 usually hides if a row isn't marked 'closed'
         locked_wagers = float(df[df['status_check'] == 'open']['wager'].sum())
+
+        # --- 🎯 THE UNIFIED CALCULATION ---
+        # We NO LONGER subtract BRIAN_ALLOCATION.
+        tradable_balance = float(vault_cash - tax_pot - locked_wagers)
 
         return {
             "vault_cash": vault_cash,
-            # 🚀 NEW: Tradable Balance now includes the £200 previously held by Brian
-            "tradable_balance": float(vault_cash - tax_pot - locked_wagers),
+            "tradable_balance": tradable_balance,
             "tax_pot": tax_pot, 
             "burn": burn, 
             "trades_df": df
