@@ -4,6 +4,7 @@ from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
 import vance, kael, jace, piper, brian
 from datetime import datetime, timedelta
+import alt-sentinel as alt
 import altair as alt
 
 # --- ALT-SENTINEL INSTITUTIONAL LAYOUT ---
@@ -16,14 +17,11 @@ ASSETS = ["XRP", "XLM", "HBAR"]
 @st.cache_data(ttl=60)
 def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
-    # Vault GID (Main)
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
-    # Harvester GID (Brian's Log)
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
     
     try:
         df_vault = pd.read_csv(URL_VAULT)
-        # Attempt to load Brian's existing grid memory
         try:
             df_harvest = pd.read_csv(URL_HARVESTER)
         except:
@@ -66,13 +64,12 @@ if not raw_vault.empty:
     if 'asset' in vault_df.columns:
         vault_df['asset'] = vault_df['asset'].astype(str).str.upper().str.strip()
 
-    vault_df = vault_df.dropna(subset=['timestamp', bal_col])
-    vault_df = vault_df.sort_values('timestamp', ascending=True)
+    vault_df = vault_df.dropna(subset=['timestamp', bal_col]).sort_values('timestamp', ascending=True)
 
 # --- 📱 UI LAYOUT ---
 tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office", "🚜 The Harvester"])
 
-# --- 🛰️ TAB 1: SENTINEL ENGINE (Jace & Kael) ---
+# --- 🛰️ TAB 1: SENTINEL ENGINE ---
 with tab1:
     st.title("🏛️ Alt-Sentinel: High-Precision Desk")
     st.sidebar.write(f"📊 Vault Records: {len(vault_df)}")
@@ -86,7 +83,6 @@ with tab1:
             price = vance.scout_live_price(coin)
             if price:
                 coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
-                
                 with st.container():
                     st.divider()
                     st.header(f"🛰️ Sector: {coin}")
@@ -103,19 +99,18 @@ with tab1:
                         
                         chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
                         line = alt.Chart(chart_data).mark_line(
-                            color="#00ff00" if (not coin_history.empty and 'snap' in locals() and snap > 0) else "#ff4b4b"
+                            color="#00ff00" if ('snap' in locals() and snap > 0) else "#ff4b4b"
                         ).encode(
-                            x=alt.X('timestamp:T', title='Historical Timeline'),
+                            x=alt.X('timestamp:T', title='Timeline'),
                             y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
                             tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                         ).properties(height=300).interactive()
-                        
                         st.altair_chart(line, width="stretch")
                         
                         if 'ma' in locals():
                             jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'])
 
-# --- 🧾 TAB 2: ACCOUNTING (PIPER) ---
+# --- 🧾 TAB 2: ACCOUNTING ---
 with tab2:
     st.title("💼 Accounting Office")
     if ledger_data:
@@ -126,38 +121,41 @@ with tab2:
         m3.metric("Tax Pot", f"£{ledger_data['tax_pot']:,.2f}")
         m4.metric("Burn", f"£{ledger_data['burn']:,.2f}")
         st.divider()
-        st.dataframe(piper.format_institutional_ledger(ledger_data['trades_df'], {}), width="stretch")
+        st.dataframe(piper.format_institutional_ledger(ledger_data['trades_df'], {}), use_container_width=True)
 
-# --- 🚜 TAB 3: THE HARVESTER (BRIAN) ---
+# --- 🚜 TAB 3: THE HARVESTER ---
 with tab3:
     st.title("🚜 The Harvester")
     target = st.selectbox("Harvest Sector", ASSETS, index=2)
     
-    # 🕵️ MEMORY CHECK: See if Brian has an active grid in the Harvester Log first
-    active_grid_exists = False
+    # Check for memory in Sheet
+    display_grid = pd.DataFrame()
+    anchor = 0.0
+    in_log = False
+
     if not raw_harvester_log.empty:
-        # Standardize columns for the log check
         raw_harvester_log.columns = [str(c).lower().strip() for c in raw_harvester_log.columns]
-        # Filter for the selected sector
         current_log = raw_harvester_log[raw_harvester_log['sector'].astype(str).str.upper() == target.upper()]
         if not current_log.empty:
-            active_grid_exists = True
             display_grid = current_log
-            # Extract anchor from the log if available
-            anchor = current_log['anchor_price'].iloc[0] if 'anchor_price' in current_log.columns else vance.scout_live_price(target)
-    
-    if not active_grid_exists:
-        # Fallback: Create new grid if none exists in Google Sheets
+            anchor = float(current_log['anchor_price'].iloc[0])
+            in_log = True
+
+    # If not in log, get live price and prepare a new grid
+    if not in_log:
         b_price = vance.scout_live_price(target)
         if b_price:
             harvester = brian.BrianHarvester(anchor_price=b_price)
             display_grid = harvester.active_grid
             anchor = b_price
-        else:
-            anchor = 0
-            display_grid = pd.DataFrame()
+            
+            # Action Button to Save
+            if st.button(f"🚀 Initialize {target} Harvest Grid"):
+                # Use the helper function from brian.py
+                brian.save_to_log_with_memory(conn, harvester.active_grid, target, anchor)
+                st.success(f"Grid for {target} anchored at ${anchor}!")
+                st.rerun()
 
-    # --- DISPLAY METRICS ---
     c1, c2, c3 = st.columns(3)
     c1.metric("Reserved Budget", "£200.00")
     c2.metric("Grid Anchor", f"${anchor:,.6f}")
@@ -166,21 +164,20 @@ with tab3:
     st.divider()
     st.subheader("📋 Active Harvest Orders")
     if not display_grid.empty:
-        st.dataframe(display_grid, width="stretch", hide_index=True)
+        # Show only relevant trading columns
+        view_cols = ['level', 'type', 'price', 'status', 'wager_gbp']
+        st.dataframe(display_grid[[c for c in view_cols if c in display_grid.columns]], hide_index=True, use_container_width=True)
     else:
-        st.warning(f"Waiting for live scout or log data for {target}...")
+        st.warning(f"No active grid for {target}. Scout Vance for a live anchor.")
     
-    # --- HARVEST CHART ---
-    if not vault_df.empty and 'asset' in vault_df.columns:
+    # Harvester Graph
+    if not vault_df.empty:
         b_hist = vault_df[vault_df['asset'] == target.upper()].tail(60)
         if not b_hist.empty:
             st.subheader("📡 Live Geometric Escalator")
-            # Force rename column for Altair consistency
             chart_data = b_hist.rename(columns={bal_col: 'price'})
             b_chart = alt.Chart(chart_data).mark_line(color="#8884d8").encode(
                 x='timestamp:T', 
                 y=alt.Y('price:Q', scale=alt.Scale(zero=False))
             )
-            st.altair_chart(b_chart.properties(height=400), width="stretch")
-        else:
-            st.info(f"Waiting for more vault data for {target}...")
+            st.altair_chart(b_chart.properties(height=400), use_container_width=True)
