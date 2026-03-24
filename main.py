@@ -97,16 +97,26 @@ with tab1:
                             c4.metric("RSI", f"{rsi:.1f}")
                         
                         chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
+                        
+                        # Logic-safe color check
+                        is_bullish = False
+                        if analysis and analysis[0] is not None:
+                            if analysis[1] > 0:
+                                is_bullish = True
+
                         line = alt.Chart(chart_data).mark_line(
-                            color="#00ff00" if ('snap' in locals() and snap > 0) else "#ff4b4b"
+                            color="#00ff00" if is_bullish else "#ff4b4b"
                         ).encode(
                             x=alt.X('timestamp:T', title='Timeline'),
                             y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
                             tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                         ).properties(height=300).interactive()
-                        st.altair_chart(line, use_container_width=True)
                         
-                        if 'ma' in locals():
+                        # surgical fix: changed use_container_width to width='stretch'
+                        st.altair_chart(line, width='stretch')
+                        
+                        if analysis and analysis[0] is not None:
+                            ma, snap, rsi, hook = analysis
                             jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'])
 
 # --- 🧾 TAB 2: ACCOUNTING ---
@@ -120,7 +130,8 @@ with tab2:
         m3.metric("Tax Pot", f"£{ledger_data['tax_pot']:,.2f}")
         m4.metric("Burn", f"£{ledger_data['burn']:,.2f}")
         st.divider()
-        st.dataframe(piper.format_institutional_ledger(ledger_data['trades_df'], {}), use_container_width=True)
+        # surgical fix: changed use_container_width to width='stretch'
+        st.dataframe(piper.format_institutional_ledger(ledger_data['trades_df'], {}), width='stretch')
 
 # --- 🚜 TAB 3: THE HARVESTER ---
 with tab3:
@@ -151,7 +162,6 @@ with tab3:
                 vault_price = float(latest_entry[bal_col].iloc[0])
                 last_time = latest_entry['timestamp'].iloc[0]
                 
-                # Brian now initialized with Piper's live tradable balance
                 harvester = brian.BrianHarvester(anchor_price=vault_price, tradable_balance=tradable_bal)
                 display_grid = harvester.active_grid
                 anchor = vault_price
@@ -167,7 +177,6 @@ with tab3:
         else:
             st.error("🚨 Vault is empty. Wait for a heartbeat ping to establish price.")
 
-    # --- 📊 UPDATED DYNAMIC METRICS ---
     c1, c2, c3 = st.columns(3)
     c1.metric("Brian's Risk Unit", "2.0%")
     c2.metric("Grid Anchor", f"${anchor:,.6f}")
@@ -177,7 +186,8 @@ with tab3:
     st.subheader("📋 Active Harvest Orders")
     if not display_grid.empty:
         view_cols = ['level', 'type', 'price', 'status', 'wager_gbp']
-        st.dataframe(display_grid[[c for c in view_cols if c in display_grid.columns]], hide_index=True, use_container_width=True)
+        # surgical fix: changed use_container_width to width='stretch'
+        st.dataframe(display_grid[[c for c in view_cols if c in display_grid.columns]], hide_index=True, width='stretch')
     else:
         st.warning(f"No active grid for {target}. Ensure Vault data exists.")
     
@@ -188,13 +198,11 @@ with tab3:
             st.subheader("📡 Live Geometric Escalator")
             b_hist = b_hist.rename(columns={bal_col: 'price'})
             
-            # 1. Price Line
             price_line = alt.Chart(b_hist).mark_line(color="#1f77b4").encode(
                 x=alt.X('timestamp:T', title='Time'),
                 y=alt.Y('price:Q', title='Price (USD)', scale=alt.Scale(zero=False))
             )
 
-            # 2. Grid Rungs Overlay
             if not display_grid.empty:
                 grid_viz = display_grid.copy()
                 grid_viz['color'] = grid_viz['type'].apply(lambda x: '#228b22' if x == 'BUY' else '#d2322d')
@@ -211,4 +219,5 @@ with tab3:
             else:
                 final_chart = price_line.properties(height=400).interactive()
 
-            st.altair_chart(final_chart, use_container_width=True)
+            # surgical fix: changed use_container_width to width='stretch'
+            st.altair_chart(final_chart, width='stretch')
