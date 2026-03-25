@@ -120,7 +120,7 @@ def show_performance_metrics(ledger_data):
         if 'timestamp' in display_df.columns:
             display_df = display_df.sort_values('timestamp', ascending=False)
             
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
 def format_institutional_ledger(df, params=None):
     if df.empty:
