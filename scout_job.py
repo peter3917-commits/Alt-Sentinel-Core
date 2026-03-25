@@ -1,6 +1,6 @@
 import vance
 import brian 
-import claw  # <--- 🦅 ADDED CLAW
+import claw  
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import gspread
@@ -79,7 +79,7 @@ for coin in ASSETS:
             print(f"🛰️ Scouted {coin}: ${price}")
 
             try:
-                # Brian targets the Harvester tab via full_spreadsheet
+                # Brian's Harvester (GID 2062418608)
                 brian.execute_autonomous_harvest(full_spreadsheet, coin.upper(), price)
             except Exception as b_err:
                 print(f"⚠️ Brian skipped harvest: {b_err}")
@@ -119,30 +119,29 @@ if new_records:
 
 # --- 🦅 THE CLAW SENTIMENT SCAN (Log Update) ---
 try:
-    print("🦅 Claw is scanning sentiment for XRP...")
+    print("🦅 Claw is scanning sentiment for all assets...")
+    # Lock onto the tab name "Claw_Log"
+    claw_log_sheet = full_spreadsheet.worksheet("Claw_Log")
     scout = claw.Claw()
-    risk_val, headline, source = scout.calculate_vibe("XRP")
     
-    # FIX: Lock onto "Claw_Log" by name so it never writes to Harvester_Log
-    try:
-        claw_log_sheet = full_spreadsheet.worksheet("Claw_Log")
-    except:
-        # Fallback to the original GID index only if the name lookup fails
-        claw_log_sheet = full_spreadsheet.get_worksheet(2) 
-
-    # SAFETY CHECK: If the title contains 'harvest', abort the write to prevent mixed data
-    if "harvest" in claw_log_sheet.title.lower():
-        print(f"❌ ROUTING ERROR: Index 2 is currently '{claw_log_sheet.title}'. Aborting Claw write to prevent corruption.")
-    else:
+    for coin in ASSETS:
+        risk_val, headline, source = scout.calculate_vibe(coin)
+        
+        # NEW ROW FORMAT: Includes the ASSET name
         new_claw_row = [
             now_utc.strftime('%Y-%m-%d %H:%M:%S'),
+            coin.upper(), # <--- ASSET COLUMN
             f"{risk_val}%",
             "BEARISH" if risk_val > 60 else "BULLISH" if risk_val < 40 else "NEUTRAL",
             headline[:100],
             source
         ]
-        claw_log_sheet.append_row(new_claw_row, value_input_option='USER_ENTERED')
-        print(f"✅ Claw sentiment logged successfully to '{claw_log_sheet.title}': {risk_val}%")
+        
+        # Verify we aren't writing to Harvester tab by accident
+        if "harvest" not in claw_log_sheet.title.lower():
+            claw_log_sheet.append_row(new_claw_row, value_input_option='USER_ENTERED')
+            print(f"✅ {coin} sentiment logged: {risk_val}%")
+            time.sleep(1) # Prevent rate limiting
 
 except Exception as claw_err:
     print(f"⚠️ Claw skip (Non-critical): {claw_err}")
