@@ -3,11 +3,12 @@ import os
 from datetime import datetime
 import numpy as np
 
-def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_multiplier=50):
+def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_multiplier=50, **kwargs):
     """
     Jace: High-Precision Execution Agent (Sentinel 2.1).
-    UPDATED: Now accepts risk_multiplier (0-100) to auto-scale position sizing.
+    UPDATED: Now using **kwargs to prevent Streamlit Tab crashes.
     """
+    # ... rest of your code remains the same ...
     # --- TICKER BRIDGE ---
     ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
     search_asset = ticker_map.get(asset.upper(), asset).upper()
