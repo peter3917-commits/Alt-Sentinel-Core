@@ -79,6 +79,7 @@ for coin in ASSETS:
             print(f"🛰️ Scouted {coin}: ${price}")
 
             try:
+                # Brian targets the Harvester tab via full_spreadsheet
                 brian.execute_autonomous_harvest(full_spreadsheet, coin.upper(), price)
             except Exception as b_err:
                 print(f"⚠️ Brian skipped harvest: {b_err}")
@@ -117,23 +118,31 @@ if new_records:
         print(f"⚠️ Vault update failed: {e}")
 
 # --- 🦅 THE CLAW SENTIMENT SCAN (Log Update) ---
-# We run this last so it doesn't slow down the Vault/Harvester timing.
 try:
     print("🦅 Claw is scanning sentiment for XRP...")
-    # This calls the update function we built for claw.py
-    # Passing 'full_spreadsheet' instead of 'conn' because this job uses gspread
     scout = claw.Claw()
     risk_val, headline, source = scout.calculate_vibe("XRP")
     
-    claw_log_sheet = full_spreadsheet.get_worksheet(2) # GID 205181431 (Claw_Log)
-    new_claw_row = [
-        now_utc.strftime('%Y-%m-%d %H:%M:%S'),
-        f"{risk_val}%",
-        "BEARISH" if risk_val > 60 else "BULLISH" if risk_val < 40 else "NEUTRAL",
-        headline[:100],
-        source
-    ]
-    claw_log_sheet.append_row(new_claw_row, value_input_option='USER_ENTERED')
-    print(f"✅ Claw sentiment logged: {risk_val}%")
+    # FIX: Lock onto "Claw_Log" by name so it never writes to Harvester_Log
+    try:
+        claw_log_sheet = full_spreadsheet.worksheet("Claw_Log")
+    except:
+        # Fallback to the original GID index only if the name lookup fails
+        claw_log_sheet = full_spreadsheet.get_worksheet(2) 
+
+    # SAFETY CHECK: If the title contains 'harvest', abort the write to prevent mixed data
+    if "harvest" in claw_log_sheet.title.lower():
+        print(f"❌ ROUTING ERROR: Index 2 is currently '{claw_log_sheet.title}'. Aborting Claw write to prevent corruption.")
+    else:
+        new_claw_row = [
+            now_utc.strftime('%Y-%m-%d %H:%M:%S'),
+            f"{risk_val}%",
+            "BEARISH" if risk_val > 60 else "BULLISH" if risk_val < 40 else "NEUTRAL",
+            headline[:100],
+            source
+        ]
+        claw_log_sheet.append_row(new_claw_row, value_input_option='USER_ENTERED')
+        print(f"✅ Claw sentiment logged successfully to '{claw_log_sheet.title}': {risk_val}%")
+
 except Exception as claw_err:
     print(f"⚠️ Claw skip (Non-critical): {claw_err}")
