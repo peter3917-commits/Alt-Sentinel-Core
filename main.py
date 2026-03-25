@@ -127,64 +127,74 @@ with tab2:
     except Exception as e:
         st.error(f"Piper Performance Metric Error: {e}")
 
-# --- 🚜 TAB 3: HARVESTER (UPDATED VISUALS) ---
+# --- 🚜 TAB 3: HARVESTER (FIXED PRICE LINE) ---
 with tab3:
     st.header("🚜 Autonomous Harvester: HBAR Grid Monitor")
     
     if not vault_df.empty:
-        # Filter Vance's data for the last 24 hours
-        last_24h = datetime.now() - timedelta(hours=24)
-        hbar_history = vault_df[(vault_df['asset'] == 'HBAR') & (vault_df['timestamp'] >= last_24h)].copy()
+        # 1. 🕒 ROBUST TIME FILTERING
+        # We ensure everything is in UTC or localized to match
+        now = datetime.now()
+        last_24h = now - timedelta(hours=24)
+        
+        # Filter for HBAR
+        hbar_all = vault_df[vault_df['asset'] == 'HBAR'].copy()
+        # Filter for last 24h
+        hbar_history = hbar_all[hbar_all['timestamp'] >= last_24h].copy()
+
+        # --- 🛠️ DEBUG ASSISTANT (Only shows if there's an issue) ---
+        if hbar_history.empty:
+            st.warning(f"⚠️ Price line missing: Found {len(hbar_all)} HBAR records, but 0 in the last 24 hours.")
+            if not hbar_all.empty:
+                st.info(f"Latest HBAR data point in Vault: {hbar_all['timestamp'].max()}")
+                # Fallback: Show last 500 points regardless of time if 24h is empty
+                hbar_history = hbar_all.tail(500)
         
         if not hbar_history.empty:
-            # 1. Background Price Line (Vance)
-            price_line = alt.Chart(hbar_history).mark_line(color='#ffffff', strokeWidth=2).encode(
-                x=alt.X('timestamp:T', title="Time (Last 24h)"),
-                y=alt.Y(f'{bal_col}:Q', title="HBAR Price ($)", scale=alt.Scale(zero=False))
+            # 2. Background Price Line (Vance)
+            price_line = alt.Chart(hbar_history).mark_line(
+                color='#ffffff', 
+                strokeWidth=2,
+                opacity=0.8
+            ).encode(
+                x=alt.X('timestamp:T', title="Timeline"),
+                y=alt.Y(f'{bal_col}:Q', title="Price ($)", scale=alt.Scale(zero=False)),
+                tooltip=['timestamp', f'{bal_col}']
             )
 
-            # 2. Brian's Horizontal Grid Lines
+            # 3. Brian's Horizontal Grid Lines
             if not raw_harvester_log.empty:
-                brian_data = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
+                # Filter Brian's log for HBAR
+                brian_hbar = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
                 
-                # Create horizontal dashed lines for pending/filled levels
-                grid_lines = alt.Chart(brian_data).mark_rule(strokeDash=[4, 4]).encode(
+                grid_lines = alt.Chart(brian_hbar).mark_rule(strokeDash=[4, 4]).encode(
                     y='price:Q',
                     color=alt.condition(
-                        alt.datum.type == 'BUY', 
-                        alt.value('#00ff00'), # Green for Buy Trap
-                        alt.value('#ff4b4b')  # Red for Sell Trap
+                        alt.datum.type == 'SELL', 
+                        alt.value('#ff4b4b'), # Red
+                        alt.value('#00ff00')  # Green
                     ),
                     size=alt.value(1.5),
                     tooltip=['level', 'type', 'price', 'status']
                 )
 
-                # 3. Grid Price Labels (Right Side)
-                grid_labels = alt.Chart(brian_data).mark_text(
-                    align='left',
-                    dx=10,
-                    fontSize=12,
-                    fontWeight='bold'
+                # 4. Right-side Price Labels
+                grid_labels = alt.Chart(brian_hbar).mark_text(
+                    align='left', dx=10, fontSize=12, fontWeight='bold'
                 ).encode(
                     y='price:Q',
-                    x=alt.value(750), # Hard-coded pixels to push labels to the right
+                    x=alt.value(800), # Push to right edge
                     text=alt.Text('price:Q', format='.5f'),
-                    color=alt.condition(alt.datum.type == 'BUY', alt.value('#00ff00'), alt.value('#ff4b4b'))
+                    color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00'))
                 )
 
-                # Combine everything
-                combined_chart = (price_line + grid_lines + grid_labels).properties(
-                    height=500
-                ).interactive()
-                
-                st.altair_chart(combined_chart, use_container_width=True)
+                # Layer and render
+                st.altair_chart((price_line + grid_lines + grid_labels).properties(height=500), use_container_width=True)
             else:
-                st.altair_chart(price_line.interactive(), use_container_width=True)
-                st.info("Waiting for Brian's grid levels to load...")
+                st.altair_chart(price_line.properties(height=500), use_container_width=True)
+    else:
+        st.error("Vault Data is empty. Vance hasn't reported any prices yet.")
 
     st.divider()
     st.subheader("📜 Brian's Live Level Status")
-    if not raw_harvester_log.empty:
-        st.dataframe(raw_harvester_log, use_container_width=True)
-    else:
-        st.info("No activity found in the Harvester Log.")
+    st.dataframe(raw_harvester_log, use_container_width=True)
