@@ -1,8 +1,8 @@
 import requests
-import time
+import pandas as pd
+from datetime import datetime
 
 # --- CONFIG ---
-# Get a free API Key at https://cryptopanic.com/developers/api/
 CP_API_KEY = "YOUR_CRYPTOPANIC_API_KEY" 
 
 class Claw:
@@ -11,18 +11,13 @@ class Claw:
         self.news_url = "https://cryptopanic.com/api/v1/posts/"
 
     def get_macro_risk(self):
-        """Fetches the 0-100 Fear & Greed Index score."""
         try:
             r = requests.get(self.fng_url, timeout=5).json()
             return int(r['data'][0]['value'])
         except:
-            return 50 # Neutral default
+            return 50 
 
     def get_asset_sentiment(self, ticker):
-        """
-        Scans news for specific tickers. 
-        Returns a simplified 'Risk Multiplier' (0.5 to 1.5).
-        """
         params = {
             'auth_token': CP_API_KEY,
             'currencies': ticker,
@@ -32,21 +27,47 @@ class Claw:
         try:
             r = requests.get(self.news_url, params=params, timeout=5).json()
             votes = r['results'][0]['votes']
-            # Logic: More 'bearish' votes = Higher Risk %
             bullish = votes.get('positive', 0)
             bearish = votes.get('negative', 0)
-            
-            if (bullish + bearish) == 0: return 0 # No news is neutral
+            if (bullish + bearish) == 0: return 0.5 
             return round(bearish / (bullish + bearish), 2)
         except:
-            return 0.5 # Default to middle-ground risk
+            return 0.5 
 
     def calculate_vibe(self, ticker):
-        macro = self.get_macro_risk()       # 0-100
-        asset_risk = self.get_asset_sentiment(ticker) # 0-1
-        
-        # Weighted Risk Formula: 40% Macro + 60% Specific News
-        # We invert Macro (because 100 Greed is actually 'Riskier' for buying)
+        macro = self.get_macro_risk()       
+        asset_risk = self.get_asset_sentiment(ticker) 
         total_risk = (macro * 0.4) + (asset_risk * 100 * 0.6)
-        
         return round(total_risk, 1)
+
+# --- 🛰️ NEW: THE WRITING FUNCTION ---
+def update_claw_log(conn, ticker="XRP"):
+    """
+    Surgical Update: This takes the calculated risk and 
+    writes it to the 'Claw_Log' tab in your Google Sheet.
+    """
+    scout = Claw()
+    risk_score = scout.calculate_vibe(ticker)
+    
+    # Create the row for the Google Sheet
+    new_entry = pd.DataFrame([{
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "risk_score": f"{risk_score}%",
+        "note": f"Automated scan for {ticker}"
+    }])
+    
+    try:
+        # 1. Read existing log from the tab named 'Claw_Log'
+        existing_df = conn.read(worksheet="Claw_Log")
+        
+        # 2. Append the new risk score
+        updated_df = pd.concat([existing_df, new_entry], ignore_index=True)
+        
+        # 3. Write back (keep last 100 rows to prevent sheet bloat)
+        conn.update(worksheet="Claw_Log", data=updated_df.tail(100))
+        
+        print(f"🦅 Claw: Market Risk logged at {risk_score}%")
+        return risk_score
+    except Exception as e:
+        print(f"⚠️ Claw Logging Error: {e}")
+        return 50.0
