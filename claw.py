@@ -1,6 +1,6 @@
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- CONFIG ---
 CP_API_KEY = "YOUR_CRYPTOPANIC_API_KEY" 
@@ -53,29 +53,43 @@ class Claw:
 def update_claw_log(conn, ticker="XRP"):
     scout = Claw()
     risk_val, headline, source = scout.calculate_vibe(ticker)
+    now = datetime.now()
     
-    # EXACT column match for your Google Sheet
+    # New entry to add
     new_entry = pd.DataFrame([{
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
         "assetrisk_score": f"{risk_val}%",
         "sentiment_vibe": "BEARISH" if risk_val > 60 else "BULLISH" if risk_val < 40 else "NEUTRAL",
-        "top_headline": headline[:100], # Truncate for sheet neatness
+        "top_headline": headline[:100], 
         "source_impact": source
     }])
     
     try:
-        # Read existing or create empty with headers if reading fails
+        # 1. Read existing data
         try:
             existing_df = conn.read(worksheet="Claw_Log")
+            # Ensure timestamp is datetime for filtering
+            existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
         except:
             existing_df = pd.DataFrame(columns=["timestamp", "assetrisk_score", "sentiment_vibe", "top_headline", "source_impact"])
 
-        # Append and keep last 50 entries
-        updated_df = pd.concat([existing_df, new_entry], ignore_index=True).tail(50)
+        # 2. Add new entry
+        combined_df = pd.concat([existing_df, new_entry], ignore_index=True)
+
+        # 3. 🧹 CLEANUP: Filter for records from the last 48 hours ONLY
+        cutoff = now - timedelta(hours=48)
+        # Convert timestamp back to datetime (just in case) and filter
+        combined_df['timestamp'] = pd.to_datetime(combined_df['timestamp'])
+        updated_df = combined_df[combined_df['timestamp'] >= cutoff].copy()
         
-        # Write back to sheet
+        # Format timestamp back to string for neat Google Sheets display
+        updated_df['timestamp'] = updated_df['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        # 4. Write back to sheet (Overwrites with the fresh 48-hour window)
         conn.update(worksheet="Claw_Log", data=updated_df)
+        
+        print(f"🦅 Claw Cleanup: Log restricted to last 48 hours. Current records: {len(updated_df)}")
         return risk_val
     except Exception as e:
-        print(f"Claw Write Error: {e}")
+        print(f"Claw Write/Cleanup Error: {e}")
         return 50.0
