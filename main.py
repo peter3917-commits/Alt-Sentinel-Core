@@ -16,7 +16,7 @@ ASSETS = ["XRP", "XLM", "HBAR"]
 @st.cache_data(ttl=60)
 def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
-    # Using your verified GIDs
+    # Verified GIDs from conversation
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
     URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=205181431" 
@@ -78,7 +78,7 @@ with tab1:
     # --- 🦅 CLAW'S SIDEBAR ---
     st.sidebar.divider()
     st.sidebar.subheader("🦅 Claw's Lookout")
-    risk_val = 50.0 # Default fallback
+    risk_val = 50.0 
     
     if not raw_claw_log.empty:
         try:
@@ -86,20 +86,18 @@ with tab1:
             risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
             
-            # PROTECTIVE FIX: Only convert if it's actually a number
             clean_risk = "".join(filter(lambda x: x.isdigit() or x == '.', risk_raw))
             if clean_risk:
                 risk_val = float(clean_risk)
                 st.sidebar.metric("Market Risk Score", f"{risk_val}%")
             else:
-                st.sidebar.warning("Claw: Waiting for numeric data...")
+                st.sidebar.warning("Claw: Data Pending...")
         except:
             st.sidebar.warning("Claw: Data Formatting Issue")
     
     auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
     if auto_trade:
         try:
-            # Note: This uses the logic in claw.py to target gid=205181431
             claw.update_claw_log(conn, ticker="XRP") 
         except Exception as e:
             st.sidebar.error(f"Claw Log Update Failed: {e}")
@@ -122,7 +120,6 @@ with tab1:
                     c3.metric("Snap %", f"{snap:.3f}%")
                     c4.metric("RSI", f"{rsi:.1f}")
                     
-                    # Charting Logic
                     chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
                     if not chart_data.empty:
                         line = alt.Chart(chart_data).mark_line(color="#00ff00" if snap > 0 else "#ff4b4b").encode(
@@ -130,7 +127,6 @@ with tab1:
                         ).properties(height=300)
                         st.altair_chart(line, width='stretch')
                     
-                    # Trade Execution
                     try:
                         jace.execute_trade(
                             asset=coin, current_price=price, average=ma, 
@@ -142,20 +138,45 @@ with tab1:
 # --- 🧾 TAB 2: ACCOUNTING OFFICE ---
 with tab2:
     st.header("🧾 Firm Ledger & Accounting")
+    # FIX: Piper handles the table. Removing the second st.dataframe prevents the double call.
     try:
         piper.show_performance_metrics(ledger_data)
     except Exception as e:
         st.error(f"Piper Performance Metric Error: {e}")
 
-    if not ledger_data['trades_df'].empty:
-        st.divider()
-        st.subheader("📜 Master Ledger Log")
-        st.dataframe(ledger_data['trades_df'], width='stretch')
-    else:
-        st.info("No trades currently on record.")
-
 # --- 🚜 TAB 3: HARVESTER ---
 with tab3:
     st.header("🚜 Autonomous Harvester Log")
+    
     if not raw_harvester_log.empty:
+        # 1. 📈 THE AMBER HARVESTER GRAPH
+        try:
+            h_chart_data = raw_harvester_log.tail(300).copy()
+            h_chart_data['timestamp'] = pd.to_datetime(h_chart_data['timestamp'])
+            
+            # Map wager_gbp or last column for Y axis
+            y_axis = 'wager_gbp' if 'wager_gbp' in h_chart_data.columns else h_chart_data.columns[-1]
+            
+            harvest_line = alt.Chart(h_chart_data).mark_area(
+                line={'color':'#ffaa00'},
+                color=alt.Gradient(
+                    gradient='linear',
+                    stops=[alt.GradientStop(color='#ffaa00', offset=0),
+                           alt.GradientStop(color='transparent', offset=1)],
+                    x1=1, x2=1, y1=1, y2=0
+                )
+            ).encode(
+                x='timestamp:T',
+                y=alt.Y(f'{y_axis}:Q', title="Activity Value")
+            ).properties(height=300)
+            
+            st.altair_chart(harvest_line, width='stretch')
+        except:
+            st.info("Harvester Graph: Optimizing data window...")
+
+        # 2. 📜 THE ACTIVITY TABLE
+        st.divider()
+        st.subheader("Raw Activity Ledger")
         st.dataframe(raw_harvester_log, width='stretch')
+    else:
+        st.info("No activity recorded in the Harvester log.")
