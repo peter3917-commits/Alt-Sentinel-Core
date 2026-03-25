@@ -6,29 +6,33 @@ import numpy as np
 def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_multiplier=50, **kwargs):
     """
     Jace: High-Precision Execution Agent (Sentinel 2.1).
-    UPDATED: Now using **kwargs to prevent Streamlit Tab crashes.
+    FIXED: Case-sensitivity on 'tradable_balance' to match Piper's output.
     """
-    # ... rest of your code remains the same ...
+    
     # --- TICKER BRIDGE ---
     ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
     search_asset = ticker_map.get(asset.upper(), asset).upper()
 
     # --- DYNAMIC RISK PARAMETERS ---
     try:
-        # Pull the last known balance from the ledger
-        tradable_balance = ledger_df['Tradable_Balance'].iloc[-1] if 'Tradable_Balance' in ledger_df.columns else 1000.0
-        
+        # Piper standardizes columns to lowercase. We must match that here.
+        if ledger_df is not None and 'tradable_balance' in ledger_df.columns:
+            balance = float(ledger_df['tradable_balance'].iloc[-1])
+        else:
+            balance = 1000.0 # Default starting capital
+            
         # RISK SCALING LOGIC:
-        # If Risk is 100 (Max), risk_factor becomes 0 (No trade).
-        # If Risk is 0 (Safe), risk_factor becomes 1.0 (Full 20% wager).
-        risk_factor = (100 - risk_multiplier) / 100
+        # Claw provides 0-100. We invert it so 100 Risk = 0 Wager.
+        risk_factor = max(0, (100 - float(risk_multiplier)) / 100)
         
-        base_wager = float(tradable_balance) * 0.20 
-        WAGER_SIZE = base_wager * risk_factor
+        # We risk 20% of balance, scaled by Claw's sentiment
+        base_wager = balance * 0.20 
+        WAGER_SIZE = round(base_wager * risk_factor, 2)
         
     except Exception:
-        WAGER_SIZE = 50.0  # Safe fallback if ledger reading fails
+        WAGER_SIZE = 50.0  # Safe fallback 
 
+    # --- STRATEGY THRESHOLDS ---
     STOP_LOSS_PCT = 3.5      
     PROFIT_THRESHOLD = 2.0    
     TRAILING_PCT = 10.0      
@@ -40,17 +44,20 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_mult
     # --- 1. ACTIVE TRADE MONITORING ---
     if ledger_df is not None and not ledger_df.empty:
         try:
-            mask = (ledger_df['asset'].str.upper() == search_asset) & (ledger_df['result_clean'].str.upper() == 'OPEN')
+            # Match assets and check for 'OPEN' status (lowercased by Piper)
+            mask = (ledger_df['asset'].astype(str).str.upper() == search_asset) & \
+                   (ledger_df['status_check'].astype(str).str.upper() == 'OPEN')
             
             if mask.any():
                 trade_idx = ledger_df[mask].index[-1]
                 entry_price = float(ledger_df.at[trade_idx, 'price'])
+                # 'result' column stores the peak price while trade is OPEN
                 peak_price = float(ledger_df.at[trade_idx, 'result']) 
                 
                 new_peak = max(current_price, peak_price)
                 perf_from_entry = ((current_price - entry_price) / entry_price) * 100
                 perf_from_peak = ((current_price - new_peak) / new_peak) * 100
-                total_pnl_pct = ((current_price / entry_price) * 100) - 100
+                total_pnl_pct = perf_from_entry
 
                 # EXIT LOGIC
                 hit_stop = perf_from_entry <= -STOP_LOSS_PCT
@@ -75,15 +82,16 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_mult
                 
                 return "HOLDING", {"pnl": total_pnl_pct}
                 
-        except Exception as e:
-            print(f"🏛️ JACE AUDIT ERROR: {e}")
+        except Exception:
+            pass # Keep silent in Streamlit production
 
     # --- 2. NEW TRADE ANALYSIS (ENTRY) ---
     snap_pct = ((current_price - average) / average) * 100
     
-    # Only Buy if we actually have a Wager Size (Risk hasn't zeroed us out)
+    # Only Buy if we have a Wager Size and technical triggers hit
     if snap_pct <= SNAP_THRESHOLD and hook and WAGER_SIZE > 0:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Format: Timestamp, Asset, Type, Price, Wager, Result(Peak), Profit, Status
         trade_info = [ts, search_asset, "BUY", current_price, WAGER_SIZE, current_price, 0.0, "OPEN"]
         return "BUY", trade_info
 
