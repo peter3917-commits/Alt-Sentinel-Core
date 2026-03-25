@@ -18,7 +18,7 @@ def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
-    # UPDATED: Injected your Claw GID 205181431
+    # FIXED: Injected your confirmed GID for Claw_Log
     URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=205181431" 
     
     try:
@@ -85,7 +85,6 @@ with tab1:
     # Pull latest risk from Claw's Log
     if not raw_claw_log.empty:
         try:
-            # Cleaning the risk_score string to ensure it's a displayable metric
             latest_val = str(raw_claw_log.tail(1)['risk_score'].values[0])
             st.sidebar.metric("Market Risk Score", latest_val)
         except:
@@ -138,7 +137,6 @@ with tab1:
                         if analysis and analysis[0] is not None:
                             ma, snap, rsi, hook = analysis
                             
-                            # CLAW INTEGRATION: Jace now checks risk before execution
                             risk_val = 50 # Default
                             if not raw_claw_log.empty:
                                 try:
@@ -146,7 +144,6 @@ with tab1:
                                     risk_val = float(risk_raw.replace('%',''))
                                 except: pass
                             
-                            # Jace executes with Claw's Risk awareness
                             jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'], risk_multiplier=risk_val)
 
 # --- 🧾 TAB 2: ACCOUNTING ---
