@@ -22,8 +22,14 @@ def fetch_vault_data_direct():
     
     try:
         df_vault = pd.read_csv(URL_VAULT)
-        df_harvest = pd.read_csv(URL_HARVESTER) if URL_HARVESTER else pd.DataFrame()
-        df_claw = pd.read_csv(URL_CLAW) if URL_CLAW else pd.DataFrame()
+        try:
+            df_harvest = pd.read_csv(URL_HARVESTER)
+        except:
+            df_harvest = pd.DataFrame()
+        try:
+            df_claw = pd.read_csv(URL_CLAW)
+        except:
+            df_claw = pd.DataFrame()
         return df_vault, df_harvest, df_claw
     except Exception as e:
         st.error(f"Vault Sync Error: {e}")
@@ -67,6 +73,10 @@ tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office",
 # --- 🛰️ TAB 1: SENTINEL ENGINE ---
 with tab1:
     st.title("🏛️ Alt-Sentinel: High-Precision Desk")
+    
+    # Global Heartbeat (Refreshes UI to see GitHub Action updates)
+    st_autorefresh(interval=300000, key="global_heartbeat")
+    
     st.sidebar.divider()
     st.sidebar.subheader("🦅 Claw's Lookout")
     risk_val = 50.0 
@@ -74,28 +84,30 @@ with tab1:
     if not raw_claw_log.empty:
         try:
             raw_claw_log.columns = [str(c).lower().strip() for c in raw_claw_log.columns]
-            risk_col = 'risk_score' if 'risk_score' in raw_claw_log.columns else raw_claw_log.columns[2]
+            risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
-            risk_val = float("".join(filter(lambda x: x.isdigit() or x == '.', risk_raw)))
-            st.sidebar.metric("Market Risk Score", f"{risk_val}%")
+            clean_risk = "".join(filter(lambda x: x.isdigit() or x == '.', risk_raw))
+            if clean_risk:
+                risk_val = float(clean_risk)
+                st.sidebar.metric("Market Risk Score", f"{risk_val}%")
         except:
-            st.sidebar.warning("Claw: Data Formatting Issue")
-    
-    st.sidebar.toggle("Activate Vance Auto-Scout", value=True)
-    st_autorefresh(interval=300000, key="global_refresh")
+            st.sidebar.warning("Claw: Data Syncing...")
 
     if not vault_df.empty:
         for coin in ASSETS:
-            price = vance.scout_live_price(coin)
-            if price:
-                # REINFORCED COIN FILTERING
-                coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
+            # OBSERVER MODE: Pull the latest price from your internal vault_df
+            coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
+            
+            if not coin_history.empty:
+                latest_entry = coin_history.iloc[-1]
+                price = latest_entry[bal_col]
                 
                 st.divider()
                 st.header(f"🛰️ Sector: {coin}")
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("Live Price", f"${price:,.6f}")
+                c1.metric("Last Scouted", f"${price:,.6f}")
                 
+                # Analysis via Kael
                 analysis = kael.check_for_snap(coin, price, coin_history.rename(columns={bal_col: "price_usd"}))
                 if analysis and analysis[0] is not None:
                     ma, snap, rsi, hook = analysis
@@ -103,11 +115,12 @@ with tab1:
                     c3.metric("Snap %", f"{snap:.3f}%")
                     c4.metric("RSI", f"{rsi:.1f}")
                     
+                    # Trend Chart
                     chart_data = coin_history.tail(100).rename(columns={bal_col: 'Price'})
                     line = alt.Chart(chart_data).mark_line(color="#00d4ff", strokeWidth=3).encode(
                         x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
                     ).properties(height=300)
-                    st.altair_chart(line, width='stretch')
+                    st.altair_chart(line, width="stretch")
 
 # --- 🧾 TAB 2: ACCOUNTING OFFICE ---
 with tab2:
@@ -115,7 +128,7 @@ with tab2:
     try:
         piper.show_performance_metrics(ledger_data)
     except Exception as e:
-        st.error(f"Piper Performance Metric Error: {e}")
+        st.error(f"Piper Error: {e}")
 
 # --- 🚜 TAB 3: HARVESTER ---
 with tab3:
@@ -126,11 +139,11 @@ with tab3:
         if not hbar_all.empty:
             hbar_all = hbar_all.rename(columns={bal_col: 'Price'})
             
-            # 24h Filter
+            # 24h Filter with Fallback
             hbar_history = hbar_all[hbar_all['timestamp'] >= (datetime.now() - timedelta(hours=24))].copy()
             if hbar_history.empty: hbar_history = hbar_all.tail(100)
 
-            # Price Line
+            # Price Line (Cyan)
             price_line = alt.Chart(hbar_history).mark_line(
                 color='#00d4ff', strokeWidth=3, point=alt.OverlayMarkDef(size=30)
             ).encode(
@@ -143,8 +156,7 @@ with tab3:
                 brian_hbar = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
                 grid_rules = alt.Chart(brian_hbar).mark_rule(strokeDash=[6, 4], size=2).encode(
                     y='price:Q',
-                    color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00')),
-                    tooltip=['level', 'type', 'price', 'status']
+                    color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00'))
                 )
 
                 grid_labels = alt.Chart(brian_hbar).mark_text(align='left', dx=10, fontSize=12, fontWeight='bold').encode(
@@ -152,10 +164,10 @@ with tab3:
                     color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00'))
                 )
 
-                st.altair_chart((price_line + grid_rules + grid_labels).properties(height=500), width='stretch')
+                st.altair_chart((price_line + grid_rules + grid_labels).properties(height=500).interactive(), width="stretch")
             else:
-                st.altair_chart(price_line.properties(height=500), width='stretch')
+                st.altair_chart(price_line.properties(height=500).interactive(), width="stretch")
 
     st.divider()
     st.subheader("📜 Brian's Live Level Status")
-    st.dataframe(raw_harvester_log, width='stretch')
+    st.dataframe(raw_harvester_log, width="stretch")
