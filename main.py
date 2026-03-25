@@ -81,17 +81,15 @@ with tab1:
     st.sidebar.divider()
     st.sidebar.subheader("🦅 Claw's Lookout")
     
-    risk_val = 50 # Default global risk
+    risk_val = 50 
     if not raw_claw_log.empty:
         try:
-            # Check if columns are 'risk_score' or 'assetrisk_score' based on your CSV exports
             risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
             risk_val = float(risk_raw.replace('%',''))
             st.sidebar.metric("Market Risk Score", f"{risk_val}%")
         except:
             st.sidebar.warning("Claw: Data Formatting Issue")
-            st.sidebar.write(raw_claw_log.columns) # Debug help
     else:
         st.sidebar.info("Claw is scouting the horizon...")
 
@@ -99,7 +97,6 @@ with tab1:
     
     auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
     if auto_trade:
-        # TRIGGER CLAW CRON: Every 5 mins
         try:
             claw.update_claw_log(conn, ticker="XRP") 
         except Exception as e:
@@ -112,55 +109,64 @@ with tab1:
                 price = vance.scout_live_price(coin)
                 if price:
                     coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
-                    with st.container():
-                        st.divider()
-                        st.header(f"🛰️ Sector: {coin}")
-                        c1, c2, c3, c4 = st.columns(4)
-                        c1.metric("Live Price", f"${price:,.6f}")
+                    st.divider()
+                    st.header(f"🛰️ Sector: {coin}")
+                    
+                    # 1. METRICS ROW
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric("Live Price", f"${price:,.6f}")
+                    
+                    analysis = kael.check_for_snap(coin, price, coin_history.rename(columns={bal_col: "price_usd"}))
+                    
+                    if analysis and analysis[0] is not None:
+                        ma, snap, rsi, hook = analysis
+                        c2.metric("Moving Avg", f"${ma:,.6f}")
+                        c3.metric("Snap %", f"{snap:.3f}%")
+                        c4.metric("RSI", f"{rsi:.1f}")
                         
-                        if not coin_history.empty:
-                            analysis = kael.check_for_snap(coin, price, coin_history.rename(columns={bal_col: "price_usd"}))
-                            if analysis and analysis[0] is not None:
-                                ma, snap, rsi, hook = analysis
-                                c2.metric("Moving Avg", f"${ma:,.6f}")
-                                c3.metric("Snap %", f"{snap:.3f}%")
-                                c4.metric("RSI", f"{rsi:.1f}")
-                            
-                                chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
-                                is_bullish = snap > 0
-
-                                line = alt.Chart(chart_data).mark_line(
-                                    color="#00ff00" if is_bullish else "#ff4b4b"
-                                ).encode(
-                                    x=alt.X('timestamp:T', title='Timeline'),
-                                    y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
-                                    tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
-                                ).properties(height=300).interactive()
-                                
-                                st.altair_chart(line, use_container_width=True)
-                                
-                                # --- ⚡ JACE EXECUTION (HARDENED CALL) ---
-                                try:
-                                    jace.execute_trade(
-                                        asset=coin, 
-                                        current_price=price, 
-                                        average=ma, 
-                                        rsi=rsi, 
-                                        hook=hook, 
-                                        ledger_df=ledger_data['trades_df'], 
-                                        risk_multiplier=risk_val
-                                    )
-                                except Exception as j_err:
-                                    st.error(f"Jace Error ({coin}): {j_err}")
+                        # 2. CHARTING
+                        chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
+                        line = alt.Chart(chart_data).mark_line(
+                            color="#00ff00" if snap > 0 else "#ff4b4b"
+                        ).encode(
+                            x=alt.X('timestamp:T', title='Timeline'),
+                            y=alt.Y('Price:Q', scale=alt.Scale(zero=False)),
+                            tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
+                        ).properties(height=300).interactive()
+                        
+                        st.altair_chart(line, width='stretch')
+                        
+                        # 3. JACE CALL (SAFETY WRAPPED)
+                        try:
+                            jace.execute_trade(
+                                asset=coin, 
+                                current_price=price, 
+                                average=ma, 
+                                rsi=rsi, 
+                                hook=hook, 
+                                ledger_df=ledger_data['trades_df'], 
+                                risk_multiplier=risk_val
+                            )
+                        except Exception as j_err:
+                            st.error(f"Jace Pipeline Blocked for {coin}")
             except Exception as e:
-                st.error(f"Sector {coin} Failure: {e}")
+                st.error(f"Sector {coin} encountered a sync error.")
 
 # --- 🧾 TAB 2: ACCOUNTING OFFICE ---
 with tab2:
     st.header("🧾 Firm Ledger & Accounting")
+    
+    # HEALING POINT: Try performance metrics first, then the table
+    try:
+        if hasattr(piper, 'show_performance_metrics'):
+            piper.show_performance_metrics(ledger_data)
+        else:
+            st.warning("Piper update pending: 'show_performance_metrics' not found.")
+    except Exception as e:
+        st.error(f"Accounting Dashboard Error: {e}")
+
     if not ledger_data['trades_df'].empty:
-        st.dataframe(ledger_data['trades_df'], use_container_width=True)
-        piper.show_performance_metrics(ledger_data)
+        st.dataframe(ledger_data['trades_df'], width='stretch')
     else:
         st.info("Waiting for first trade record...")
 
@@ -168,6 +174,6 @@ with tab2:
 with tab3:
     st.header("🚜 Autonomous Harvester Log")
     if not raw_harvester_log.empty:
-        st.dataframe(raw_harvester_log, use_container_width=True)
+        st.dataframe(raw_harvester_log, width='stretch')
     else:
-        st.info("Harvester is dormant. Waiting for yield targets...")
+        st.info("Harvester is dormant.")
