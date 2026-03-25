@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 from streamlit_gsheets import GSheetsConnection
 from streamlit_autorefresh import st_autorefresh
-import vance, kael, jace, piper, brian  # Your custom logic files
+import vance, kael, jace, piper, brian, claw  # Added claw here
 from datetime import datetime, timedelta
-import altair as alt  # This is the real library for your charts
+import altair as alt
 
 # --- ALT-SENTINEL INSTITUTIONAL LAYOUT ---
 st.set_page_config(page_title="Alt-Sentinel: High-Precision Desk", page_icon="🏛️", layout="wide")
@@ -18,6 +18,7 @@ def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
+    URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=YOUR_CLAW_GID" # Ensure you add your GID here
     
     try:
         df_vault = pd.read_csv(URL_VAULT)
@@ -25,10 +26,14 @@ def fetch_vault_data_direct():
             df_harvest = pd.read_csv(URL_HARVESTER)
         except:
             df_harvest = pd.DataFrame()
-        return df_vault, df_harvest
+        try:
+            df_claw = pd.read_csv(URL_CLAW)
+        except:
+            df_claw = pd.DataFrame()
+        return df_vault, df_harvest, df_claw
     except Exception as e:
         st.error(f"Vault Sync Error: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 @st.cache_data(ttl=60)
 def fetch_ledger_data(_conn):
@@ -36,7 +41,7 @@ def fetch_ledger_data(_conn):
 
 # --- 🏛️ GLOBAL DATA INITIALIZATION ---
 conn = st.connection("gsheets", type=GSheetsConnection)
-raw_vault, raw_harvester_log = fetch_vault_data_direct()
+raw_vault, raw_harvester_log, raw_claw_log = fetch_vault_data_direct()
 ledger_data = fetch_ledger_data(conn)
 
 # --- 🛡️ DATA HARDENING (VAULT) ---
@@ -71,6 +76,18 @@ tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office",
 # --- 🛰️ TAB 1: SENTINEL ENGINE ---
 with tab1:
     st.title("🏛️ Alt-Sentinel: High-Precision Desk")
+    
+    # --- 🦅 CLAW'S SIDEBAR LOOKOUT ---
+    st.sidebar.divider()
+    st.sidebar.subheader("🦅 Claw's Lookout")
+    
+    # Pull latest risk from Claw's Log
+    if not raw_claw_log.empty:
+        latest_risk = raw_claw_log.tail(1)['risk_score'].values[0]
+        st.sidebar.metric("Market Risk Score", f"{latest_risk}")
+    else:
+        st.sidebar.info("Claw is scouting the horizon...")
+
     st.sidebar.write(f"📊 Vault Records: {len(vault_df)}")
     
     auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
@@ -98,7 +115,6 @@ with tab1:
                         
                         chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
                         
-                        # Logic-safe color check
                         is_bullish = False
                         if analysis and analysis[0] is not None:
                             if analysis[1] > 0:
@@ -112,12 +128,20 @@ with tab1:
                             tooltip=['timestamp', alt.Tooltip('Price:Q', format=',.6f')]
                         ).properties(height=300).interactive()
                         
-                        # surgical fix: changed use_container_width to width='stretch'
                         st.altair_chart(line, width='stretch')
                         
                         if analysis and analysis[0] is not None:
                             ma, snap, rsi, hook = analysis
-                            jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'])
+                            
+                            # CLAW INTEGRATION: Jace now checks risk before execution
+                            risk_val = 50 # Default
+                            if not raw_claw_log.empty:
+                                try:
+                                    risk_val = float(raw_claw_log.tail(1)['risk_score'].values[0].replace('%',''))
+                                except: pass
+                            
+                            # Jace executes with Claw's Risk awareness
+                            jace.execute_trade(coin, price, ma, rsi, hook, ledger_data['trades_df'], risk_multiplier=risk_val)
 
 # --- 🧾 TAB 2: ACCOUNTING ---
 with tab2:
@@ -130,7 +154,6 @@ with tab2:
         m3.metric("Tax Pot", f"£{ledger_data['tax_pot']:,.2f}")
         m4.metric("Burn", f"£{ledger_data['burn']:,.2f}")
         st.divider()
-        # surgical fix: changed use_container_width to width='stretch'
         st.dataframe(piper.format_institutional_ledger(ledger_data['trades_df'], {}), width='stretch')
 
 # --- 🚜 TAB 3: THE HARVESTER ---
@@ -142,7 +165,6 @@ with tab3:
     anchor = 0.0
     in_log = False
     
-    # 💰 Dynamic Calculation for Wager Display
     tradable_bal = ledger_data['tradable_balance']
     dynamic_wager = tradable_bal * 0.02
 
@@ -172,10 +194,6 @@ with tab3:
                     brian.save_to_log_with_memory(conn, harvester.active_grid, target, anchor)
                     st.success(f"Grid for {target} anchored to Vault Price!")
                     st.rerun()
-            else:
-                st.warning(f"⚠️ No price record for {target} found in the Vault yet.")
-        else:
-            st.error("🚨 Vault is empty. Wait for a heartbeat ping to establish price.")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Brian's Risk Unit", "2.0%")
@@ -186,12 +204,8 @@ with tab3:
     st.subheader("📋 Active Harvest Orders")
     if not display_grid.empty:
         view_cols = ['level', 'type', 'price', 'status', 'wager_gbp']
-        # surgical fix: changed use_container_width to width='stretch'
         st.dataframe(display_grid[[c for c in view_cols if c in display_grid.columns]], hide_index=True, width='stretch')
-    else:
-        st.warning(f"No active grid for {target}. Ensure Vault data exists.")
     
-    # --- 🛰️ LIVE GEOMETRIC ESCALATOR ---
     if not vault_df.empty:
         b_hist = vault_df[vault_df['asset'] == target.upper()].tail(60).copy()
         if not b_hist.empty:
@@ -219,5 +233,6 @@ with tab3:
             else:
                 final_chart = price_line.properties(height=400).interactive()
 
+            st.altair_chart(final_chart, width='stretch')
             # surgical fix: changed use_container_width to width='stretch'
             st.altair_chart(final_chart, width='stretch')
