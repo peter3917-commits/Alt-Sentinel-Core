@@ -1,8 +1,8 @@
 streamlit>=1.50.0
-pandas>=2.3.3
+pandas>=2.2.0,<3.0.0
 pandas-ta>=0.3.14b
 requests
-streamlit-gsheets-connection
+st-gsheets-connection
 streamlit-autorefresh
 altair
 gspread
