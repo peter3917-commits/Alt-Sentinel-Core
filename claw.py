@@ -2,10 +2,24 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 import streamlit as st
+import os
 
-# --- CONFIG ---
-# Pro-tip: Store this in Streamlit Secrets (Settings > Secrets) as "CP_API_KEY"
-CP_API_KEY = st.secrets.get("CP_API_KEY", "YOUR_CRYPTOPANIC_API_KEY") 
+# --- 🦅 CLAW'S KEY RECOVERY (No-Crash Logic) ---
+# This function allows the script to run on both Streamlit Cloud AND GitHub Actions
+def get_api_key():
+    try:
+        # 1. Try Streamlit Secrets (Works on the Web Dashboard)
+        if "CP_API_KEY" in st.secrets:
+            return st.secrets["CP_API_KEY"]
+    except Exception:
+        # If we are on GitHub, st.secrets is missing and will throw an error
+        pass
+    
+    # 2. Try Environment Variables (Works on GitHub Actions Runner)
+    # 3. Fallback to a placeholder if everything fails
+    return os.getenv("CP_API_KEY", "YOUR_CRYPTOPANIC_API_KEY")
+
+CP_API_KEY = get_api_key()
 
 class Claw:
     def __init__(self):
@@ -13,16 +27,18 @@ class Claw:
         self.news_url = "https://cryptopanic.com/api/v1/posts/"
 
     def get_macro_risk(self):
+        """Fetches Fear & Greed Index to assess overall market risk."""
         try:
             r = requests.get(self.fng_url, timeout=5).json()
-            # Fear & Greed is 0-100. 0=Extreme Fear (Risk), 100=Extreme Greed.
-            # We invert it: Low F&G value = High Risk.
+            # Fear & Greed is 0-100. 0=Extreme Fear, 100=Extreme Greed.
+            # We invert it: High F&G value = Low Risk Score.
             fng_value = int(r['data'][0]['value'])
             return 100 - fng_value 
         except:
             return 50 
 
     def get_asset_sentiment(self, ticker):
+        """Fetches latest 'Hot' news for the ticker and calculates sentiment."""
         if CP_API_KEY == "YOUR_CRYPTOPANIC_API_KEY":
             return 0.5, "API Key Missing", "System"
             
@@ -44,28 +60,29 @@ class Claw:
             bullish = votes.get('positive', 0)
             bearish = votes.get('negative', 0)
             
-            # Sentiment 0 to 1.0 (1.0 = Max Bearish/Risk)
+            # Sentiment 0 to 1.0 (1.0 = Max Risk/Bearish)
             sentiment = round(bearish / (bullish + bearish), 2) if (bullish + bearish) > 0 else 0.5
             return sentiment, headline, source
         except:
             return 0.5, "Scan Error", "Internal"
 
     def calculate_vibe(self, ticker):
+        """Combines Macro Risk and News Sentiment into a single score."""
         macro_risk = self.get_macro_risk()
         asset_sentiment, headline, source = self.get_asset_sentiment(ticker)
         
-        # Risk Score: 40% Macro (F&G) + 60% News Sentiment
-        # asset_sentiment is 0-1.0, so we * 100 to match macro scale
+        # Total Risk: 40% Macro + 60% News
         total_risk = (macro_risk * 0.4) + (asset_sentiment * 100 * 0.6)
         return round(total_risk, 1), headline, source
 
 # --- 🛰️ LOGGING ENGINE ---
 def update_claw_log(conn, ticker="XRP"):
+    """Performs the scan and updates the Google Sheet (Claw_Log)."""
     scout = Claw()
     risk_val, headline, source = scout.calculate_vibe(ticker)
     now = datetime.now()
     
-    # FORMATTING FIX: Store as raw number for Jace, add % only for display in Main
+    # Create the entry for the Google Sheet
     new_entry = pd.DataFrame([{
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
         "assetrisk_score": float(risk_val), 
@@ -75,7 +92,7 @@ def update_claw_log(conn, ticker="XRP"):
     }])
     
     try:
-        # 1. Read existing data
+        # 1. Read existing log from GSheets
         try:
             existing_df = conn.read(worksheet="Claw_Log", ttl=0)
             if existing_df is not None and not existing_df.empty:
@@ -85,22 +102,27 @@ def update_claw_log(conn, ticker="XRP"):
         except:
             existing_df = pd.DataFrame()
 
-        # 2. Add new entry
+        # 2. Append new scan
         combined_df = pd.concat([existing_df, new_entry], ignore_index=True)
 
-        # 3. 🧹 CLEANUP: Last 48 hours
+        # 3. Keep only the last 48 hours to keep the sheet clean
         cutoff = now - timedelta(hours=48)
         combined_df['timestamp'] = pd.to_datetime(combined_df['timestamp'])
         updated_df = combined_df[combined_df['timestamp'] >= cutoff].copy()
         
-        # Format back to string for Google Sheets
+        # Format dates for GSheets
         updated_df['timestamp'] = updated_df['timestamp'].dt.strftime("%Y-%m-%d %H:%M:%S")
 
-        # 4. Write back to sheet
-        # Note: Using .write is the standard for the GSheetsConnection update
+        # 4. Write back to the GSheet
         conn.write(worksheet="Claw_Log", data=updated_df)
         
         return risk_val
+        
     except Exception as e:
-        st.error(f"Claw Log Error: {e}")
+        # Use print for GitHub Action logging and st.error for the Streamlit UI
+        print(f"Claw Log Write Error: {e}")
+        try:
+            st.error(f"Claw Log Error: {e}")
+        except:
+            pass
         return 50.0
