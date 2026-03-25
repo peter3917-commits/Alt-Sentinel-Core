@@ -22,14 +22,8 @@ def fetch_vault_data_direct():
     
     try:
         df_vault = pd.read_csv(URL_VAULT)
-        try:
-            df_harvest = pd.read_csv(URL_HARVESTER)
-        except:
-            df_harvest = pd.DataFrame()
-        try:
-            df_claw = pd.read_csv(URL_CLAW)
-        except:
-            df_claw = pd.DataFrame()
+        df_harvest = pd.read_csv(URL_HARVESTER) if URL_HARVESTER else pd.DataFrame()
+        df_claw = pd.read_csv(URL_CLAW) if URL_CLAW else pd.DataFrame()
         return df_vault, df_harvest, df_claw
     except Exception as e:
         st.error(f"Vault Sync Error: {e}")
@@ -80,26 +74,23 @@ with tab1:
     if not raw_claw_log.empty:
         try:
             raw_claw_log.columns = [str(c).lower().strip() for c in raw_claw_log.columns]
-            risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
+            risk_col = 'risk_score' if 'risk_score' in raw_claw_log.columns else raw_claw_log.columns[2]
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
-            clean_risk = "".join(filter(lambda x: x.isdigit() or x == '.', risk_raw))
-            if clean_risk:
-                risk_val = float(clean_risk)
-                st.sidebar.metric("Market Risk Score", f"{risk_val}%")
-            else:
-                st.sidebar.warning("Claw: Data Pending...")
+            risk_val = float("".join(filter(lambda x: x.isdigit() or x == '.', risk_raw)))
+            st.sidebar.metric("Market Risk Score", f"{risk_val}%")
         except:
             st.sidebar.warning("Claw: Data Formatting Issue")
     
-    auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
-    if auto_trade:
-        st_autorefresh(interval=300000, key="vance_heartbeat")
+    st.sidebar.toggle("Activate Vance Auto-Scout", value=True)
+    st_autorefresh(interval=300000, key="global_refresh")
 
-    if not vault_df.empty and 'asset' in vault_df.columns:
+    if not vault_df.empty:
         for coin in ASSETS:
             price = vance.scout_live_price(coin)
             if price:
+                # REINFORCED COIN FILTERING
                 coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
+                
                 st.divider()
                 st.header(f"🛰️ Sector: {coin}")
                 c1, c2, c3, c4 = st.columns(4)
@@ -112,12 +103,11 @@ with tab1:
                     c3.metric("Snap %", f"{snap:.3f}%")
                     c4.metric("RSI", f"{rsi:.1f}")
                     
-                    chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
-                    if not chart_data.empty:
-                        line = alt.Chart(chart_data).mark_line(color="#00ff00" if snap > 0 else "#ff4b4b").encode(
-                            x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
-                        ).properties(height=300)
-                        st.altair_chart(line, use_container_width=True)
+                    chart_data = coin_history.tail(100).rename(columns={bal_col: 'Price'})
+                    line = alt.Chart(chart_data).mark_line(color="#00d4ff", strokeWidth=3).encode(
+                        x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
+                    ).properties(height=300)
+                    st.altair_chart(line, width='stretch')
 
 # --- 🧾 TAB 2: ACCOUNTING OFFICE ---
 with tab2:
@@ -127,78 +117,45 @@ with tab2:
     except Exception as e:
         st.error(f"Piper Performance Metric Error: {e}")
 
-# --- 🚜 TAB 3: HARVESTER (ROBUST PRICE LINE) ---
+# --- 🚜 TAB 3: HARVESTER ---
 with tab3:
     st.header("🚜 Autonomous Harvester: HBAR Grid Monitor")
     
     if not vault_df.empty:
-        # 1. 🔍 Get HBAR Data and Force Column Naming
         hbar_all = vault_df[vault_df['asset'] == 'HBAR'].copy()
-        
-        if hbar_all.empty:
-            st.warning("⚠️ No HBAR data found in the Vault. Check if Vance is scouting HBAR.")
-        else:
-            # Rename for chart consistency
+        if not hbar_all.empty:
             hbar_all = hbar_all.rename(columns={bal_col: 'Price'})
             
-            # 2. 🕒 Last 24h Filter with "Emergency Fallback"
-            now = datetime.now()
-            last_24h = now - timedelta(hours=24)
-            hbar_history = hbar_all[hbar_all['timestamp'] >= last_24h].copy()
-            
-            # Fallback: If 24h filter returns nothing, show the last 100 data points
-            if hbar_history.empty:
-                hbar_history = hbar_all.tail(100)
-                st.info(f"Showing last {len(hbar_history)} heartbeat points (Timezone filter was empty).")
+            # 24h Filter
+            hbar_history = hbar_all[hbar_all['timestamp'] >= (datetime.now() - timedelta(hours=24))].copy()
+            if hbar_history.empty: hbar_history = hbar_all.tail(100)
 
-            # 3. 📈 Create Price Line (High Visibility Cyan)
+            # Price Line
             price_line = alt.Chart(hbar_history).mark_line(
-                color='#00d4ff', # Neon Cyan
-                strokeWidth=3,
-                point=alt.OverlayMarkDef(color='#00d4ff', size=30) # Adds dots to the line
+                color='#00d4ff', strokeWidth=3, point=alt.OverlayMarkDef(size=30)
             ).encode(
                 x=alt.X('timestamp:T', title="Timeline"),
-                y=alt.Y('Price:Q', title="Price ($)", scale=alt.Scale(zero=False)),
-                tooltip=['timestamp', 'Price']
+                y=alt.Y('Price:Q', title="Price ($)", scale=alt.Scale(zero=False))
             )
 
-            # 4. 🕸️ Brian's Horizontal Grid Lines
+            # Brian's Grid
             if not raw_harvester_log.empty:
-                # Filter specifically for HBAR in the Harvester Log
                 brian_hbar = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
-                
-                grid_lines = alt.Chart(brian_hbar).mark_rule(
-                    strokeDash=[6, 4],
-                    size=2
-                ).encode(
+                grid_rules = alt.Chart(brian_hbar).mark_rule(strokeDash=[6, 4], size=2).encode(
                     y='price:Q',
-                    color=alt.condition(
-                        alt.datum.type == 'SELL', 
-                        alt.value('#ff4b4b'), # Red
-                        alt.value('#00ff00')  # Green
-                    ),
+                    color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00')),
                     tooltip=['level', 'type', 'price', 'status']
                 )
 
-                # 5. Right-side Price Labels
-                grid_labels = alt.Chart(brian_hbar).mark_text(
-                    align='left', dx=10, fontSize=12, fontWeight='bold'
-                ).encode(
-                    y='price:Q',
-                    x=alt.value(750), # Pushes labels to the far right
-                    text=alt.Text('price:Q', format='.5f'),
+                grid_labels = alt.Chart(brian_hbar).mark_text(align='left', dx=10, fontSize=12, fontWeight='bold').encode(
+                    y='price:Q', x=alt.value(750), text=alt.Text('price:Q', format='.5f'),
                     color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00'))
                 )
 
-                # Final Layering
-                chart = (price_line + grid_lines + grid_labels).properties(height=500).interactive()
-                st.altair_chart(chart, use_container_width=True)
+                st.altair_chart((price_line + grid_rules + grid_labels).properties(height=500), width='stretch')
             else:
-                st.altair_chart(price_line.properties(height=500).interactive(), use_container_width=True)
-                st.info("HBAR Price Line active. Waiting for Brian's grid levels...")
-    else:
-        st.error("Vault is empty. Vance needs to report data first.")
+                st.altair_chart(price_line.properties(height=500), width='stretch')
 
     st.divider()
     st.subheader("📜 Brian's Live Level Status")
-    st.dataframe(raw_harvester_log, use_container_width=True)
+    st.dataframe(raw_harvester_log, width='stretch')
