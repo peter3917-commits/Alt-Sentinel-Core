@@ -3,58 +3,55 @@ import os
 from datetime import datetime
 import numpy as np
 
-def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
+def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_multiplier=50):
     """
     Jace: High-Precision Execution Agent (Sentinel 2.1).
-    Focus: Dynamic Position Sizing (20% Tradable Balance) & Ratchet Profit Management.
-    Policy: Auto-scale wager based on Cash - (Tax + Costs).
+    UPDATED: Now accepts risk_multiplier (0-100) to auto-scale position sizing.
     """
     # --- TICKER BRIDGE ---
     ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
     search_asset = ticker_map.get(asset.upper(), asset).upper()
 
     # --- DYNAMIC RISK PARAMETERS ---
-    # We now derive WAGER_SIZE from the Ledger's 'Tradable_Balance'
     try:
-        # Assumes your Ledger has a 'Tradable_Balance' column or a specific summary row
-        # If not found, it defaults to 100 to ensure the 'Company' never stalls
+        # Pull the last known balance from the ledger
         tradable_balance = ledger_df['Tradable_Balance'].iloc[-1] if 'Tradable_Balance' in ledger_df.columns else 1000.0
-        WAGER_SIZE = float(tradable_balance) * 0.20 
+        
+        # RISK SCALING LOGIC:
+        # If Risk is 100 (Max), risk_factor becomes 0 (No trade).
+        # If Risk is 0 (Safe), risk_factor becomes 1.0 (Full 20% wager).
+        risk_factor = (100 - risk_multiplier) / 100
+        
+        base_wager = float(tradable_balance) * 0.20 
+        WAGER_SIZE = base_wager * risk_factor
+        
     except Exception:
-        WAGER_SIZE = 100.0  # Safety fallback
+        WAGER_SIZE = 50.0  # Safe fallback if ledger reading fails
 
-    STOP_LOSS_PCT = 3.5      # Fixed -3.5% Emergency Stop Loss from Entry
-    PROFIT_THRESHOLD = 2.0    # Initial 2% profit target before RSI/Trailing act
-    TRAILING_PCT = 10.0      # 10% Trailing Profit from the Peak (High-Water Mark)
-    SNAP_THRESHOLD = -2.0    # Kael's Snap trigger requirement
+    STOP_LOSS_PCT = 3.5      
+    PROFIT_THRESHOLD = 2.0    
+    TRAILING_PCT = 10.0      
+    SNAP_THRESHOLD = -2.0    
 
-    # --- SAFETY SHIELD ---
     if current_price is None or average is None or average == 0:
         return "WAITING", None
 
-    # --- 1. ACTIVE TRADE MONITORING (LEDGER RECONCILIATION) ---
+    # --- 1. ACTIVE TRADE MONITORING ---
     if ledger_df is not None and not ledger_df.empty:
         try:
-            # Search for an OPEN trade for this specific asset
             mask = (ledger_df['asset'].str.upper() == search_asset) & (ledger_df['result_clean'].str.upper() == 'OPEN')
             
             if mask.any():
-                # Get the most recent open trade
                 trade_idx = ledger_df[mask].index[-1]
                 entry_price = float(ledger_df.at[trade_idx, 'price'])
-                
-                # 'result' column stores our 'High-Water Mark' (Peak Price)
                 peak_price = float(ledger_df.at[trade_idx, 'result']) 
                 
-                # Update Peak Price if the current price is higher (The Ratchet)
                 new_peak = max(current_price, peak_price)
-                
-                # PERFORMANCE CALCULATIONS
                 perf_from_entry = ((current_price - entry_price) / entry_price) * 100
                 perf_from_peak = ((current_price - new_peak) / new_peak) * 100
                 total_pnl_pct = ((current_price / entry_price) * 100) - 100
 
-                # --- EXIT LOGIC ---
+                # EXIT LOGIC
                 hit_stop = perf_from_entry <= -STOP_LOSS_PCT
                 is_in_profit_zone = perf_from_entry >= PROFIT_THRESHOLD
                 hit_trail = is_in_profit_zone and (perf_from_peak <= -TRAILING_PCT)
@@ -72,7 +69,6 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
                     }
                     return "CLOSE", trade_update
                 
-                # --- PEAK UPDATE ---
                 if new_peak > peak_price:
                     return "PEAK_UPDATE", {"index": trade_idx, "new_peak": new_peak}
                 
@@ -84,9 +80,9 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df):
     # --- 2. NEW TRADE ANALYSIS (ENTRY) ---
     snap_pct = ((current_price - average) / average) * 100
     
-    if snap_pct <= SNAP_THRESHOLD and hook:
+    # Only Buy if we actually have a Wager Size (Risk hasn't zeroed us out)
+    if snap_pct <= SNAP_THRESHOLD and hook and WAGER_SIZE > 0:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # WAGER_SIZE is now the dynamic 20% calculated at the start of the function
         trade_info = [ts, search_asset, "BUY", current_price, WAGER_SIZE, current_price, 0.0, "OPEN"]
         return "BUY", trade_info
 
