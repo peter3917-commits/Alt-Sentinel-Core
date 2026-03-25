@@ -146,64 +146,47 @@ with tab2:
 
 # --- 🚜 TAB 3: HARVESTER ---
 with tab3:
-    st.header("🚜 Autonomous Harvester: HBAR Deep-Scan")
+    st.header("🚜 Autonomous Harvester: Institutional HBAR Scan")
     
+    # 1. 🛰️ DATA PREP: JOINING VAULT & LOG
+    # We pull the 24-hour price history from the Vault
+    if not vault_df.empty:
+        hbar_history = vault_df[vault_df['asset'] == 'HBAR'].tail(500).copy()
+        
+        if not hbar_history.empty:
+            # Create the Background Price Line (The "Movement")
+            price_line = alt.Chart(hbar_history).mark_line(color='#ffaa00', opacity=0.4).encode(
+                x=alt.X('timestamp:T', title="24-Hour Scan"),
+                y=alt.Y(f'{bal_col}:Q', title="HBAR Price ($)", scale=alt.Scale(zero=False))
+            )
+
+            # 2. 🦅 ADDING BRIAN'S FEATURES (From the Harvester Log CSV)
+            if not raw_harvester_log.empty:
+                brian_data = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
+                brian_data['timestamp'] = pd.to_datetime(brian_data['timestamp'])
+                
+                # Plot Brian's calculated BUY/SELL levels as dots on the line
+                features = alt.Chart(brian_data).mark_circle(size=80).encode(
+                    x='timestamp:T',
+                    y='price:Q',  # This is the target price from Brian's table
+                    color=alt.condition(
+                        alt.datum.type == 'BUY', 
+                        alt.value('#00ff00'), # Green for Brian's Buy levels
+                        alt.value('#ff4b4b')  # Red for Brian's Sell levels
+                    ),
+                    tooltip=['timestamp', 'level', 'type', 'price', 'status']
+                )
+
+                # Layer them together
+                st.altair_chart((price_line + features).interactive(), use_container_width=True)
+            else:
+                st.altair_chart(price_line.interactive(), use_container_width=True)
+                st.info("HBAR Price Line active. Waiting for Brian's harvest levels...")
+
+    # 3. 📜 BRIAN'S RAW ACTIVITY LOG
+    st.divider()
+    st.subheader("📜 Brian's Harvest Levels (Last Scan)")
     if not raw_harvester_log.empty:
-        try:
-            # 1. DATA HARDENING (Forcing formats so the graph can't be blank)
-            h_df = raw_harvester_log.tail(300).copy()
-            h_df['timestamp'] = pd.to_datetime(h_df['timestamp'], errors='coerce')
-            
-            # Use wager_gbp or whatever column Brian is using for HBAR prices
-            y_col = 'wager_gbp' if 'wager_gbp' in h_df.columns else h_df.columns[-1]
-            h_df[y_col] = pd.to_numeric(h_df[y_col], errors='coerce')
-            
-            # Drop rows that failed to convert so they don't break the axis
-            h_df = h_df.dropna(subset=['timestamp', y_col])
-
-            # 2. THE PRICE MOVEMENT LINE
-            price_line = alt.Chart(h_df).mark_line(
-                color='#ffaa00', 
-                strokeWidth=2,
-                opacity=0.8
-            ).encode(
-                x=alt.X('timestamp:T', title="Time (Last 24h)"),
-                y=alt.Y(f'{y_col}:Q', title="HBAR Value (£)", scale=alt.Scale(zero=False)),
-                tooltip=['timestamp', y_col, 'status']
-            )
-
-            # 3. BRIAN'S TRADE MARKERS (The "Features")
-            # This places Green dots for BUY and Red for SELL
-            markers = alt.Chart(h_df).mark_circle(size=100, opacity=1).encode(
-                x='timestamp:T',
-                y=f'{y_col}:Q',
-                color=alt.condition(
-                    alt.datum.status == 'BUY', 
-                    alt.value('#00ff00'), 
-                    alt.value('#ff4b4b')
-                ),
-                tooltip=['timestamp', y_col, 'status']
-            ).transform_filter(
-                (alt.datum.status == 'BUY') | (alt.datum.status == 'SELL')
-            )
-
-            # 4. COMBINE AND DISPLAY
-            # We add .interactive() so you can zoom in on HBAR spikes
-            st.altair_chart((price_line + markers).interactive(), use_container_width=True)
-            
-        except Exception as e:
-            st.warning(f"Harvester Graph is recalibrating data... (Error: {e})")
-
-        # 5. BRIAN'S LIVE STATUS
-        st.divider()
-        c1, c2 = st.columns(2)
-        with c1:
-            current_status = raw_harvester_log.iloc[-1]['status'] if not raw_harvester_log.empty else "Waiting"
-            st.metric("Brian's Current Action", current_status)
-        with c2:
-            st.metric("HBAR Log Depth", f"{len(raw_harvester_log)} rows")
-
-        st.subheader("📜 Raw Activity Ledger")
         st.dataframe(raw_harvester_log, width='stretch')
     else:
-        st.info("Harvester is scanning... No HBAR logs found yet.")
+        st.info("No activity found in the Harvester Log.")
