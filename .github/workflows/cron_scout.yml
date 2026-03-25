@@ -24,12 +24,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas gspread google-auth requests streamlit pandas-ta st-gsheets-connection altair streamlit-autorefresh
-          # ✅ Added streamlit-autorefresh to satisfy the import chain in scout_job.py
 
       - name: Run Scout
         env:
+          # --- Firm Credentials ---
           GSHEETS_SECRET: ${{ secrets.GSHEETS_JSON }}
           GSHEET_ID: ${{ secrets.GSHEET_ID }}
+          # --- Added Claw Credential ---
+          CP_API_KEY: ${{ secrets.CP_API_KEY }}
         run: python scout_job.py
 
       - name: Commit and Push Trade Log
