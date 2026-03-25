@@ -27,10 +27,10 @@ jobs:
 
       - name: Run Scout
         env:
-          # --- Firm Credentials ---
+          # --- Sheets & Vault ---
           GSHEETS_SECRET: ${{ secrets.GSHEETS_JSON }}
           GSHEET_ID: ${{ secrets.GSHEET_ID }}
-          # --- Added Claw Credential ---
+          # --- Claw Sentiment Key ---
           CP_API_KEY: ${{ secrets.CP_API_KEY }}
         run: python scout_job.py
 
