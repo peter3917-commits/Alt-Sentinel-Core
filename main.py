@@ -16,7 +16,6 @@ ASSETS = ["XRP", "XLM", "HBAR"]
 @st.cache_data(ttl=60)
 def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
-    # Verified GIDs from conversation
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
     URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=205181431" 
@@ -74,8 +73,6 @@ tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office",
 # --- 🛰️ TAB 1: SENTINEL ENGINE ---
 with tab1:
     st.title("🏛️ Alt-Sentinel: High-Precision Desk")
-    
-    # --- 🦅 CLAW'S SIDEBAR ---
     st.sidebar.divider()
     st.sidebar.subheader("🦅 Claw's Lookout")
     risk_val = 50.0 
@@ -85,7 +82,6 @@ with tab1:
             raw_claw_log.columns = [str(c).lower().strip() for c in raw_claw_log.columns]
             risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
-            
             clean_risk = "".join(filter(lambda x: x.isdigit() or x == '.', risk_raw))
             if clean_risk:
                 risk_val = float(clean_risk)
@@ -97,10 +93,6 @@ with tab1:
     
     auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
     if auto_trade:
-        try:
-            claw.update_claw_log(conn, ticker="XRP") 
-        except Exception as e:
-            st.sidebar.error(f"Claw Log Update Failed: {e}")
         st_autorefresh(interval=300000, key="vance_heartbeat")
 
     if not vault_df.empty and 'asset' in vault_df.columns:
@@ -125,68 +117,74 @@ with tab1:
                         line = alt.Chart(chart_data).mark_line(color="#00ff00" if snap > 0 else "#ff4b4b").encode(
                             x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
                         ).properties(height=300)
-                        st.altair_chart(line, width='stretch')
-                    
-                    try:
-                        jace.execute_trade(
-                            asset=coin, current_price=price, average=ma, 
-                            rsi=rsi, hook=hook, ledger_df=ledger_data['trades_df'], 
-                            risk_multiplier=risk_val
-                        )
-                    except: pass
+                        st.altair_chart(line, use_container_width=True)
 
 # --- 🧾 TAB 2: ACCOUNTING OFFICE ---
 with tab2:
     st.header("🧾 Firm Ledger & Accounting")
-    # FIX: Piper handles the table. Removing the second st.dataframe prevents the double call.
     try:
         piper.show_performance_metrics(ledger_data)
     except Exception as e:
         st.error(f"Piper Performance Metric Error: {e}")
 
-# --- 🚜 TAB 3: HARVESTER ---
+# --- 🚜 TAB 3: HARVESTER (UPDATED VISUALS) ---
 with tab3:
-    st.header("🚜 Autonomous Harvester: Institutional HBAR Scan")
+    st.header("🚜 Autonomous Harvester: HBAR Grid Monitor")
     
-    # 1. 🛰️ DATA PREP: JOINING VAULT & LOG
-    # We pull the 24-hour price history from the Vault
     if not vault_df.empty:
-        hbar_history = vault_df[vault_df['asset'] == 'HBAR'].tail(500).copy()
+        # Filter Vance's data for the last 24 hours
+        last_24h = datetime.now() - timedelta(hours=24)
+        hbar_history = vault_df[(vault_df['asset'] == 'HBAR') & (vault_df['timestamp'] >= last_24h)].copy()
         
         if not hbar_history.empty:
-            # Create the Background Price Line (The "Movement")
-            price_line = alt.Chart(hbar_history).mark_line(color='#ffaa00', opacity=0.4).encode(
-                x=alt.X('timestamp:T', title="24-Hour Scan"),
+            # 1. Background Price Line (Vance)
+            price_line = alt.Chart(hbar_history).mark_line(color='#ffffff', strokeWidth=2).encode(
+                x=alt.X('timestamp:T', title="Time (Last 24h)"),
                 y=alt.Y(f'{bal_col}:Q', title="HBAR Price ($)", scale=alt.Scale(zero=False))
             )
 
-            # 2. 🦅 ADDING BRIAN'S FEATURES (From the Harvester Log CSV)
+            # 2. Brian's Horizontal Grid Lines
             if not raw_harvester_log.empty:
                 brian_data = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
-                brian_data['timestamp'] = pd.to_datetime(brian_data['timestamp'])
                 
-                # Plot Brian's calculated BUY/SELL levels as dots on the line
-                features = alt.Chart(brian_data).mark_circle(size=80).encode(
-                    x='timestamp:T',
-                    y='price:Q',  # This is the target price from Brian's table
+                # Create horizontal dashed lines for pending/filled levels
+                grid_lines = alt.Chart(brian_data).mark_rule(strokeDash=[4, 4]).encode(
+                    y='price:Q',
                     color=alt.condition(
                         alt.datum.type == 'BUY', 
-                        alt.value('#00ff00'), # Green for Brian's Buy levels
-                        alt.value('#ff4b4b')  # Red for Brian's Sell levels
+                        alt.value('#00ff00'), # Green for Buy Trap
+                        alt.value('#ff4b4b')  # Red for Sell Trap
                     ),
-                    tooltip=['timestamp', 'level', 'type', 'price', 'status']
+                    size=alt.value(1.5),
+                    tooltip=['level', 'type', 'price', 'status']
                 )
 
-                # Layer them together
-                st.altair_chart((price_line + features).interactive(), use_container_width=True)
+                # 3. Grid Price Labels (Right Side)
+                grid_labels = alt.Chart(brian_data).mark_text(
+                    align='left',
+                    dx=10,
+                    fontSize=12,
+                    fontWeight='bold'
+                ).encode(
+                    y='price:Q',
+                    x=alt.value(750), # Hard-coded pixels to push labels to the right
+                    text=alt.Text('price:Q', format='.5f'),
+                    color=alt.condition(alt.datum.type == 'BUY', alt.value('#00ff00'), alt.value('#ff4b4b'))
+                )
+
+                # Combine everything
+                combined_chart = (price_line + grid_lines + grid_labels).properties(
+                    height=500
+                ).interactive()
+                
+                st.altair_chart(combined_chart, use_container_width=True)
             else:
                 st.altair_chart(price_line.interactive(), use_container_width=True)
-                st.info("HBAR Price Line active. Waiting for Brian's harvest levels...")
+                st.info("Waiting for Brian's grid levels to load...")
 
-    # 3. 📜 BRIAN'S RAW ACTIVITY LOG
     st.divider()
-    st.subheader("📜 Brian's Harvest Levels (Last Scan)")
+    st.subheader("📜 Brian's Live Level Status")
     if not raw_harvester_log.empty:
-        st.dataframe(raw_harvester_log, width='stretch')
+        st.dataframe(raw_harvester_log, use_container_width=True)
     else:
         st.info("No activity found in the Harvester Log.")
