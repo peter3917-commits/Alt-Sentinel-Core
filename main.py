@@ -16,6 +16,7 @@ ASSETS = ["XRP", "XLM", "HBAR"]
 @st.cache_data(ttl=60)
 def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
+    # Using your verified GIDs
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
     URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=205181431" 
@@ -77,20 +78,28 @@ with tab1:
     # --- 🦅 CLAW'S SIDEBAR ---
     st.sidebar.divider()
     st.sidebar.subheader("🦅 Claw's Lookout")
-    risk_val = 50.0
+    risk_val = 50.0 # Default fallback
+    
     if not raw_claw_log.empty:
         try:
             raw_claw_log.columns = [str(c).lower().strip() for c in raw_claw_log.columns]
             risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
-            risk_val = float(risk_raw.replace('%',''))
-            st.sidebar.metric("Market Risk Score", f"{risk_val}%")
+            
+            # PROTECTIVE FIX: Only convert if it's actually a number
+            clean_risk = "".join(filter(lambda x: x.isdigit() or x == '.', risk_raw))
+            if clean_risk:
+                risk_val = float(clean_risk)
+                st.sidebar.metric("Market Risk Score", f"{risk_val}%")
+            else:
+                st.sidebar.warning("Claw: Waiting for numeric data...")
         except:
             st.sidebar.warning("Claw: Data Formatting Issue")
     
     auto_trade = st.sidebar.toggle("Activate Vance Auto-Scout", value=False)
     if auto_trade:
         try:
+            # Note: This uses the logic in claw.py to target gid=205181431
             claw.update_claw_log(conn, ticker="XRP") 
         except Exception as e:
             st.sidebar.error(f"Claw Log Update Failed: {e}")
@@ -115,10 +124,11 @@ with tab1:
                     
                     # Charting Logic
                     chart_data = coin_history.tail(300).rename(columns={bal_col: 'Price'})
-                    line = alt.Chart(chart_data).mark_line(color="#00ff00" if snap > 0 else "#ff4b4b").encode(
-                        x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
-                    ).properties(height=300)
-                    st.altair_chart(line, width='stretch')
+                    if not chart_data.empty:
+                        line = alt.Chart(chart_data).mark_line(color="#00ff00" if snap > 0 else "#ff4b4b").encode(
+                            x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
+                        ).properties(height=300)
+                        st.altair_chart(line, width='stretch')
                     
                     # Trade Execution
                     try:
@@ -132,13 +142,11 @@ with tab1:
 # --- 🧾 TAB 2: ACCOUNTING OFFICE ---
 with tab2:
     st.header("🧾 Firm Ledger & Accounting")
-    # 1. Show Metrics FIRST (Uses the function in your piper.py)
     try:
         piper.show_performance_metrics(ledger_data)
     except Exception as e:
         st.error(f"Piper Performance Metric Error: {e}")
 
-    # 2. Show Table SECOND
     if not ledger_data['trades_df'].empty:
         st.divider()
         st.subheader("📜 Master Ledger Log")
