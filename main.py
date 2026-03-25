@@ -18,7 +18,8 @@ def fetch_vault_data_direct():
     SHEET_ID = "15pD60KIjHB7GNEwlbsYg-STclQ0wKYOA7zkD5oYcaJQ"
     URL_VAULT = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
     URL_HARVESTER = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=2062418608"
-    URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=YOUR_CLAW_GID" # Ensure you add your GID here
+    # UPDATED: Injected your Claw GID 205181431
+    URL_CLAW = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=205181431" 
     
     try:
         df_vault = pd.read_csv(URL_VAULT)
@@ -83,8 +84,12 @@ with tab1:
     
     # Pull latest risk from Claw's Log
     if not raw_claw_log.empty:
-        latest_risk = raw_claw_log.tail(1)['risk_score'].values[0]
-        st.sidebar.metric("Market Risk Score", f"{latest_risk}")
+        try:
+            # Cleaning the risk_score string to ensure it's a displayable metric
+            latest_val = str(raw_claw_log.tail(1)['risk_score'].values[0])
+            st.sidebar.metric("Market Risk Score", latest_val)
+        except:
+            st.sidebar.warning("Claw: Data Formatting Issue")
     else:
         st.sidebar.info("Claw is scouting the horizon...")
 
@@ -137,7 +142,8 @@ with tab1:
                             risk_val = 50 # Default
                             if not raw_claw_log.empty:
                                 try:
-                                    risk_val = float(raw_claw_log.tail(1)['risk_score'].values[0].replace('%',''))
+                                    risk_raw = str(raw_claw_log.tail(1)['risk_score'].values[0])
+                                    risk_val = float(risk_raw.replace('%',''))
                                 except: pass
                             
                             # Jace executes with Claw's Risk awareness
@@ -233,6 +239,4 @@ with tab3:
             else:
                 final_chart = price_line.properties(height=400).interactive()
 
-            st.altair_chart(final_chart, width='stretch')
-            # surgical fix: changed use_container_width to width='stretch'
             st.altair_chart(final_chart, width='stretch')
