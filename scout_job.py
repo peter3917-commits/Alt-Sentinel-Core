@@ -91,24 +91,31 @@ if new_records:
         print(f"⚠️ Vault update failed: {e}")
 
 # --- 🦅 THE CLAW SENTIMENT SCAN (Log Update) ---
+# 🏛️ AUDIT: Updated to reflect the sustainable Macro-Pivot of Claw 2.1
 try:
-    print("🦅 Claw is scanning sentiment for the Firm...")
+    print("🦅 Claw is scanning Macro Sentiment for the Firm...")
     claw_log_sheet = full_spreadsheet.worksheet("Claw_Log")
     scout = claw.Claw()
     
     for coin in ASSETS:
-        risk_val, headline, source = scout.calculate_vibe(coin)
+        # Now calls the decommissioned/keyless version of Claw
+        risk_val, status_msg, source = scout.calculate_vibe(coin)
+        
         new_claw_row = [
             now_utc.strftime('%Y-%m-%d %H:%M:%S'),
             coin.upper(),
             f"{risk_val}%",
             "BEARISH" if risk_val > 60 else "BULLISH" if risk_val < 40 else "NEUTRAL",
-            headline[:100],
+            status_msg[:100],
             source
         ]
         claw_log_sheet.append_row(new_claw_row, value_input_option='USER_ENTERED')
-        print(f"✅ {coin} sentiment logged: {risk_val}%")
+        print(f"✅ {coin} Macro Sentiment logged: {risk_val}%")
+        
+        # Maintains institutional rate-limiting
         time.sleep(1)
 
+except Exception as claw_err:
+    print(f"⚠️ Claw skip: {claw_err}")
 except Exception as claw_err:
     print(f"⚠️ Claw skip: {claw_err}")
