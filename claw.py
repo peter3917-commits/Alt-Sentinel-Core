@@ -1,70 +1,46 @@
 import requests
-import os
-import streamlit as st
 import time
-
-# --- 🦅 CLAW'S KEY RECOVERY ---
-def get_api_key():
-    try:
-        if "CP_API_KEY" in st.secrets:
-            return st.secrets["CP_API_KEY"]
-    except:
-        pass
-    # Get from environment and clean it
-    key = os.getenv("CP_API_KEY")
-    return key.strip() if key else None
 
 class Claw:
     def __init__(self):
-        # 🟢 EXACT URL FROM YOUR CRYPTOPANIC DASHBOARD
-        self.base_url = "https://cryptopanic.com/api/developer/v2/posts/"
+        """
+        Claw 2.1: Macro-Only Evolution.
+        Decommissioned CryptoPanic API to ensure 100% sustainability.
+        Uses the global Fear & Greed Index as the primary risk governor.
+        """
+        # 🟢 SUSTAINABLE MACRO SOURCE: Free & Robust
         self.fng_url = "https://api.alternative.me/fng/"
-        self.api_key = get_api_key()
 
     def get_macro_risk(self):
+        """
+        Fetches the global 'Market Vibe'.
+        Inverts the index: 100 (Extreme Greed) = 0 Risk; 0 (Extreme Fear) = 100 Risk.
+        """
         try:
-            r = requests.get(self.fng_url, timeout=5).json()
-            return 100 - int(r['data'][0]['value'])
-        except:
+            # Add a brief delay to prevent API rate-limiting during rapid pings
+            time.sleep(0.5)
+            response = requests.get(self.fng_url, timeout=5).json()
+            
+            # The API returns 0-100 (Fear to Greed). 
+            # We subtract from 100 because Jace treats high numbers as 'Risk to be avoided'.
+            fng_value = int(response['data'][0]['value'])
+            return 100 - fng_value
+        except Exception:
+            # Institutional Fallback: Assume neutral risk if the connection fails.
             return 50 
 
-    def get_asset_sentiment(self, ticker):
-        if not self.api_key:
-            return 0.5, "API Key Missing", "System"
-            
-        # 🟢 SIMPLIFIED PARAMETERS: Using only what is strictly necessary
-        params = {
-            'auth_token': self.api_key,
-            'currencies': ticker,
-            'public': 'true'
-        }
-        
-        try:
-            # Add a small delay so we don't trigger the 5 req/sec limit
-            time.sleep(1) 
-            
-            response = requests.get(self.base_url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = data.get('results', [])
-                if results:
-                    latest = results[0]
-                    votes = latest.get('votes', {})
-                    pos, neg = votes.get('positive', 0), votes.get('negative', 0)
-                    sentiment = round(neg / (pos + neg), 2) if (pos + neg) > 0 else 0.5
-                    return sentiment, latest.get('title', "News Found"), latest.get('domain', "Source")
-                return 0.5, "No recent news", "N/A"
-            
-            # This captures the 500 error and tells us it's a server-side rejection
-            return 0.5, f"V2 Server Error ({response.status_code})", "CryptoPanic"
-            
-        except Exception as e:
-            return 0.5, f"Connection Failed", "Internal"
-
     def calculate_vibe(self, ticker):
+        """
+        Calculates the Firm's Risk Multiplier.
+        Maintains the (Score, Headline, Source) signature to prevent Matrix crashes.
+        """
         macro_risk = self.get_macro_risk()
-        asset_sentiment, headline, source = self.get_asset_sentiment(ticker)
-        # 40% Fear/Greed + 60% Asset News
-        score = (macro_risk * 0.4) + (asset_sentiment * 100 * 0.6)
+        
+        # We provide a standardized status for the Ledger and UI consistency.
+        headline = f"Macro Risk Protocol Active for {ticker}"
+        source = "Alternative.me (F&G)"
+        
+        # Current logic puts 100% weight on Macro Risk.
+        score = float(macro_risk)
+        
         return round(score, 1), headline, source
