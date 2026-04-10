@@ -74,7 +74,7 @@ tab1, tab2, tab3 = st.tabs(["🛰️ Sentinel Engine", "🧾 Accounting Office",
 with tab1:
     st.title("🏛️ Alt-Sentinel: High-Precision Desk")
     
-    # Global Heartbeat (Refreshes UI to see GitHub Action updates)
+    # Global Heartbeat
     st_autorefresh(interval=300000, key="global_heartbeat")
     
     st.sidebar.divider()
@@ -84,18 +84,27 @@ with tab1:
     if not raw_claw_log.empty:
         try:
             raw_claw_log.columns = [str(c).lower().strip() for c in raw_claw_log.columns]
-            risk_col = 'assetrisk_score' if 'assetrisk_score' in raw_claw_log.columns else 'risk_score'
+            # 🏛️ AUDIT: Handling the new Macro Risk Column mapping
+            risk_col = 'risk_score' if 'risk_score' in raw_claw_log.columns else 'assetrisk_score'
+            
+            # Extract most recent macro risk
             risk_raw = str(raw_claw_log.tail(1)[risk_col].values[0])
             clean_risk = "".join(filter(lambda x: x.isdigit() or x == '.', risk_raw))
             if clean_risk:
                 risk_val = float(clean_risk)
-                st.sidebar.metric("Market Risk Score", f"{risk_val}%")
+                
+                # Dynamic UI feedback based on Macro Vibe
+                color = "normal" if 40 <= risk_val <= 60 else "inverse"
+                st.sidebar.metric("Market Risk Score", f"{risk_val}%", delta_color=color)
+                
+                # Institutional 'Vibe' Status
+                vibe = "🛡️ PROTECTIVE" if risk_val > 60 else "🚀 AGGRESSIVE" if risk_val < 40 else "⚖️ NEUTRAL"
+                st.sidebar.info(f"Firm Stance: {vibe}")
         except:
             st.sidebar.warning("Claw: Data Syncing...")
 
     if not vault_df.empty:
         for coin in ASSETS:
-            # OBSERVER MODE: Pull the latest price from your internal vault_df
             coin_history = vault_df[vault_df['asset'] == coin.upper()].copy()
             
             if not coin_history.empty:
@@ -115,7 +124,6 @@ with tab1:
                     c3.metric("Snap %", f"{snap:.3f}%")
                     c4.metric("RSI", f"{rsi:.1f}")
                     
-                    # Trend Chart
                     chart_data = coin_history.tail(100).rename(columns={bal_col: 'Price'})
                     line = alt.Chart(chart_data).mark_line(color="#00d4ff", strokeWidth=3).encode(
                         x='timestamp:T', y=alt.Y('Price:Q', scale=alt.Scale(zero=False))
@@ -139,11 +147,9 @@ with tab3:
         if not hbar_all.empty:
             hbar_all = hbar_all.rename(columns={bal_col: 'Price'})
             
-            # 24h Filter with Fallback
             hbar_history = hbar_all[hbar_all['timestamp'] >= (datetime.now() - timedelta(hours=24))].copy()
             if hbar_history.empty: hbar_history = hbar_all.tail(100)
 
-            # Price Line (Cyan)
             price_line = alt.Chart(hbar_history).mark_line(
                 color='#00d4ff', strokeWidth=3, point=alt.OverlayMarkDef(size=30)
             ).encode(
@@ -151,9 +157,10 @@ with tab3:
                 y=alt.Y('Price:Q', title="Price ($)", scale=alt.Scale(zero=False))
             )
 
-            # Brian's Grid
             if not raw_harvester_log.empty:
+                raw_harvester_log.columns = [str(c).lower().strip() for c in raw_harvester_log.columns]
                 brian_hbar = raw_harvester_log[raw_harvester_log['sector'] == 'HBAR'].copy()
+                
                 grid_rules = alt.Chart(brian_hbar).mark_rule(strokeDash=[6, 4], size=2).encode(
                     y='price:Q',
                     color=alt.condition(alt.datum.type == 'SELL', alt.value('#ff4b4b'), alt.value('#00ff00'))
