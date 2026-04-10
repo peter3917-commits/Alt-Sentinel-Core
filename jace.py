@@ -5,32 +5,32 @@ import numpy as np
 
 def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_multiplier=50, **kwargs):
     """
-    Jace: High-Precision Execution Agent (Sentinel 2.1).
-    FIXED: Case-sensitivity on 'tradable_balance' to match Piper's output.
+    Jace: High-Precision Execution Agent (Sentinel 2.2).
+    CALIBRATED: Optimized for Claw 2.1 Macro-Risk scaling.
     """
     
     # --- TICKER BRIDGE ---
-    ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HEDERA": "HBAR", "HBAR": "HBAR"}
+    ticker_map = {"XRP": "XRP", "STELLAR": "XLM", "XLM": "XLM", "HBAR": "HBAR", "HBAR": "HBAR"}
     search_asset = ticker_map.get(asset.upper(), asset).upper()
 
-    # --- DYNAMIC RISK PARAMETERS ---
+    # --- DYNAMIC RISK PARAMETERS (The 'Macro Valve') ---
     try:
-        # Piper standardizes columns to lowercase. We must match that here.
         if ledger_df is not None and 'tradable_balance' in ledger_df.columns:
             balance = float(ledger_df['tradable_balance'].iloc[-1])
         else:
-            balance = 1000.0 # Default starting capital
+            balance = 1000.0 # Institutional Default
             
-        # RISK SCALING LOGIC:
-        # Claw provides 0-100. We invert it so 100 Risk = 0 Wager.
+        # 🏛️ MACRO RISK SCALING LOGIC:
+        # risk_multiplier now comes from Claw's Fear & Greed Inversion.
+        # High Risk Multiplier (Extreme Fear) = Lower Wager Size.
         risk_factor = max(0, (100 - float(risk_multiplier)) / 100)
         
-        # We risk 20% of balance, scaled by Claw's sentiment
+        # We maintain the 20% Base Risk rule, scaled by the 'Macro Vibe'.
         base_wager = balance * 0.20 
         WAGER_SIZE = round(base_wager * risk_factor, 2)
         
     except Exception:
-        WAGER_SIZE = 50.0  # Safe fallback 
+        WAGER_SIZE = 50.0  # Conservative Fallback 
 
     # --- STRATEGY THRESHOLDS ---
     STOP_LOSS_PCT = 3.5      
@@ -44,14 +44,12 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_mult
     # --- 1. ACTIVE TRADE MONITORING ---
     if ledger_df is not None and not ledger_df.empty:
         try:
-            # Match assets and check for 'OPEN' status (lowercased by Piper)
             mask = (ledger_df['asset'].astype(str).str.upper() == search_asset) & \
                    (ledger_df['status_check'].astype(str).str.upper() == 'OPEN')
             
             if mask.any():
                 trade_idx = ledger_df[mask].index[-1]
                 entry_price = float(ledger_df.at[trade_idx, 'price'])
-                # 'result' column stores the peak price while trade is OPEN
                 peak_price = float(ledger_df.at[trade_idx, 'result']) 
                 
                 new_peak = max(current_price, peak_price)
@@ -59,7 +57,7 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_mult
                 perf_from_peak = ((current_price - new_peak) / new_peak) * 100
                 total_pnl_pct = perf_from_entry
 
-                # EXIT LOGIC
+                # EXIT LOGIC (Momentum Hunter Protocol)
                 hit_stop = perf_from_entry <= -STOP_LOSS_PCT
                 is_in_profit_zone = perf_from_entry >= PROFIT_THRESHOLD
                 hit_trail = is_in_profit_zone and (perf_from_peak <= -TRAILING_PCT)
@@ -83,16 +81,18 @@ def execute_trade(asset, current_price, average, rsi, hook, ledger_df, risk_mult
                 return "HOLDING", {"pnl": total_pnl_pct}
                 
         except Exception:
-            pass # Keep silent in Streamlit production
+            pass 
 
     # --- 2. NEW TRADE ANALYSIS (ENTRY) ---
     snap_pct = ((current_price - average) / average) * 100
     
-    # Only Buy if we have a Wager Size and technical triggers hit
+    # 🏛️ THE 'HOOK' RESTRAINT: 
+    # Must be -2.0% below the Magnet AND moving upwards (hook) AND have a non-zero wager.
     if snap_pct <= SNAP_THRESHOLD and hook and WAGER_SIZE > 0:
         ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # Format: Timestamp, Asset, Type, Price, Wager, Result(Peak), Profit, Status
         trade_info = [ts, search_asset, "BUY", current_price, WAGER_SIZE, current_price, 0.0, "OPEN"]
         return "BUY", trade_info
+
+    return "SCANNING", None
 
     return "SCANNING", None
